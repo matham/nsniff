@@ -1,0 +1,5 @@
+device:
+  com_port: COM4
+  virtual: true
+inspect: false
+last_directory: '~'

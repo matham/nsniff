@@ -1,0 +1,77 @@
+<MainView@BoxLayout>:
+    orientation: 'vertical'
+    spacing: '5dp'
+    canvas:
+        Color:
+            rgba: app.theme.primary_text
+        Rectangle:
+            pos: self.pos
+            size: self.size
+    StackLayout:
+        size_hint_y: None
+        height: '34dp'
+        orientation: 'lr-tb'
+        padding: '10dp', 0
+        canvas:
+            Color:
+                rgba: app.theme.primary
+            Rectangle:
+                pos: self.pos
+                size: self.size
+        FlatDivider:
+            color: app.theme.divider
+        FlatLabel:
+            text: str(error_indicator.count)
+            size_hint_x: None
+            width: self.texture_size[0]
+            padding: '1dp', '5dp'
+            flat_color: app.theme.text_primary
+        FlatErrorIndicatorPopup:
+            id: error_indicator
+            scale_down_color: True
+            source: 'flat_alert.png'
+            flat_color: app.theme.accent
+            on_kv_post: app.error_indicator = self
+            on_release: self.count = 0
+    BoxLayout:
+        orientation: 'horizontal'
+        DeviceDisplay
+
+
+<DeviceDisplay>:
+    orientation: 'vertical'
+    on_kv_post: app.device = self.__self__
+    BoxLayout:
+        size_hint_y: None
+        height: '34dp'
+        padding: '10dp', 0
+        spacing: '5dp'
+        ThemedLabel:
+            size_hint_x: None
+            width: self.texture_size[0]
+            text: 'Virtual device:'
+        FlatToggleButton:
+            text: 'true' if root.virtual else 'false'
+            state: 'down' if root.virtual else 'normal'
+            size_hint_x: None
+            width: '80dp'
+            on_state: root.virtual = self.state == 'down'
+            flat_background_color: app.theme.accent
+        FlatSizedTextInput:
+            background_color: app.theme.primary_text
+            size_hint_x: None
+            width: '100dp'
+            text: root.com_port
+            on_text: root.com_port = self.text
+            hint_text: 'port'
+        FlatImageToggleButton:
+            source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
+            flat_color: app.theme.accent
+            on_release: root.start() if self.state == 'down' else root.stop()
+            hover_text: '[b]start[/b] sensor' if self.state == 'normal' else '[b]stop[/b] sensor'
+        Widget
+        ThemedLabel:
+            size_hint_x: None
+            width: self.texture_size[0]
+            text: 'ID: {}, temp: {:0.1f}, humidity: {:0.1f}'.format(root.device.device_id, root.device.temp, root.device.humidity) if root.device is not None else 'ID: none, temp: 0, humidity: 0'
+    Widget
