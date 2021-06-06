@@ -1,5 +1,7 @@
 device:
-  com_port: COM4
+  auto_scale: true
+  com_port: ''
+  log_z: false
   virtual: true
 inspect: false
 last_directory: '~'
