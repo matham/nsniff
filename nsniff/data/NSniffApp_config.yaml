@@ -1,7 +1,9 @@
 device:
-  auto_scale: true
+  auto_range: true
   com_port: ''
+  global_range: false
   log_z: false
+  range_chan: mouse
   virtual: true
 inspect: false
 last_directory: '~'

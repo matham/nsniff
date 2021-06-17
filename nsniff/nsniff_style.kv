@@ -97,18 +97,59 @@
             padding_x: '10dp'
             on_state: root.log_z = self.state == 'down'
         AccentThemedToggleButton:
-            text: 'Auto scale'
-            state: 'down' if root.auto_scale else 'normal'
+            text: 'Auto range'
+            state: 'down' if root.auto_range else 'normal'
             size_hint_x: None
             width: self.texture_size[0]
             padding_x: '10dp'
-            on_state: root.auto_scale = self.state == 'down'
+            on_state: root.auto_range = self.state == 'down'
+        AccentThemedToggleButton:
+            text: 'Global range'
+            state: 'down' if root.global_range else 'normal'
+            size_hint_x: None
+            width: self.texture_size[0]
+            padding_x: '10dp'
+            on_state: root.global_range = self.state == 'down'
+        Widget
         AccentThemedButton:
-            text: 'Rescale'
+            channel_selection: channel_selection.__self__
+            text: 'Channels'
             size_hint_x: None
             width: self.texture_size[0]
             padding_x: '10dp'
-            on_state: root.draw_data()
+            on_release: channel_selection.open(self)
+            ChannelSelection:
+                id: channel_selection
+                on_kv_post:
+                    root.add_channel_selection(self)
+                    self.parent.remove_widget(self)
+        FlatSizedTextInput:
+            background_color: app.theme.primary_text
+            size_hint_x: None
+            width: '100dp'
+            on_focus: if not self.focus: root.t_start = float(self.text or 0)
+            hint_text: 'start t'
+            input_filter: 'float'
+        FlatSizedTextInput:
+            background_color: app.theme.primary_text
+            size_hint_x: None
+            width: '100dp'
+            on_focus: if not self.focus: root.t_end = float(self.text or 0)
+            hint_text: 'end t'
+            input_filter: 'float'
+        ThemedLabel:
+            size_hint_x: None
+            width: self.texture_size[0]
+            text: 'Range channel:'
+            bold: True
+        ThemedSpinner:
+            id: range_chan
+            values: ['all', 'mouse'] + [str(i + 1) for i in range(32)]
+            text: root.range_chan
+            on_text: root.range_chan = self.text
+            size_hint_min_y: self.minimum_height
+            size_hint_x: None
+            width: '100dp'
     Widget:
         size_hint_y: None
         height: '20dp'
@@ -121,8 +162,10 @@
                 texture: root.scale_tex
     ScrollView:
         bar_width: '20'
-        Graph:
+        scroll_type: ['bars']
+        SniffGraph:
             on_kv_post: root.create_plot(self.__self__)
+            dev_display: root.__self__
             size_hint: None, None
             width: max(self.parent.width, dp(50 + root.num_points))
             height: max(self.parent.height, dp(50 + 64))
@@ -135,10 +178,26 @@
             x_grid_label: True
             padding: 5
             ymin: 1
-            ymax: 32
-            xmin: 0
-            xmax: 100
+            ymax: 33
+            xmin: min(root.t_start or 0, root.t_end or root.t)
+            xmax: max(root.t_end or root.t, root.t_start or 0)
             tick_color: app.theme.accent[:3]
             border_color: app.theme.accent[:3]
             label_options: {'color': app.theme.text_primary[:3], 'bold': True}
             background_color: app.theme.primary_text
+
+
+<ChannelActiveButton@AccentThemedToggleButton>:
+    dev: None
+    channel: 0
+    size_hint: None, None
+    size: self.texture_size
+    padding: '40dp', '10dp'
+    state: 'down'
+    on_state: self.dev.active_channels[self.channel] = self.state == 'down'
+
+
+<ChannelSelection@FlatDropDown>:
+    flat_color: app.theme.primary_text
+    flat_border_color: app.theme.divider
+    do_scroll: False, True

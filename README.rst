@@ -15,6 +15,10 @@ To install https://matham.github.io/nsniff/installation.html
     :target: https://pypi.python.org/pypi/nsniff/
     :alt: Latest Version on PyPI
 
+.. image:: https://coveralls.io/repos/github/matham/nsniff/badge.svg?branch=main
+    :target: https://coveralls.io/github/matham/nsniff?branch=main
+    :alt: Coverage status
+
 .. image:: https://github.com/matham/nsniff/workflows/Python%20application/badge.svg
     :target: https://github.com/matham/nsniff/actions
     :alt: Github action status
