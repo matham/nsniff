@@ -6,6 +6,7 @@ from pymoa_remote.threading import ThreadExecutor
 from base_kivy_app.app import app_error
 from kivy_garden.graph import Graph, ContourPlot
 
+from kivy.metrics import dp
 from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
     NumericProperty, ListProperty
 from kivy.uix.boxlayout import BoxLayout
@@ -24,10 +25,12 @@ class SniffGraph(Graph):
 
     dev_display: 'DeviceDisplay' = None
 
-    def _scale_percent_pos(self, touch):
+    pos_label: Widget = None
+
+    def _scale_percent_pos(self, pos):
         w, h = self.view_size
 
-        x, y = touch.pos
+        x, y = pos
         x -= self.x + self.view_pos[0]
         y -= self.y + self.view_pos[1]
 
@@ -36,15 +39,57 @@ class SniffGraph(Graph):
 
         return x, y
 
+    def show_pos_label(self):
+        label = self.pos_label
+        if label is None:
+            label = self.pos_label = Factory.GraphPosLabel()
+        if label.parent is None:
+            from kivy.core.window import Window
+            Window.add_widget(label)
+
+    def hide_pos_label(self):
+        label = self.pos_label
+        if label is not None and label.parent is not None:
+            from kivy.core.window import Window
+            Window.remove_widget(label)
+
+    def on_kv_post(self, base_widget):
+        from kivy.core.window import Window
+        Window.fbind('mouse_pos', self._set_hover_label)
+
+    def _set_hover_label(self, *args):
+        from kivy.core.window import Window
+        pos = self.to_parent(*self.to_widget(*Window.mouse_pos))
+
+        if not self.collide_point(*pos):
+            self.hide_pos_label()
+            return
+
+        x, y = self._scale_percent_pos(pos)
+        if x > 1 or x < 0 or y > 1 or y < 0:
+            self.hide_pos_label()
+            return
+
+        self.show_pos_label()
+        text = self.dev_display.get_data_from_graph_pos(x, y)
+        if text:
+            self.pos_label.text = text
+            x_pos, y_pos = Window.mouse_pos
+            self.pos_label.pos = min(
+                x_pos + dp(20), Window.width - dp(200)), y_pos + dp(20)
+        else:
+            self.hide_pos_label()
+
     def on_touch_down(self, touch):
         if super().on_touch_down(touch):
             return True
         if not self.collide_point(*touch.pos):
             return False
 
-        x, y = self._scale_percent_pos(touch)
+        x, y = self._scale_percent_pos(touch.pos)
         if x > 1 or x < 0 or y > 1 or y < 0:
             return False
+
         touch.ud[f'sniff_graph.{self.uid}'] = x, y
         touch.grab(self)
         return True
@@ -59,7 +104,7 @@ class SniffGraph(Graph):
 
         cpos = None
         if self.collide_point(*touch.pos):
-            x, y = self._scale_percent_pos(touch)
+            x, y = self._scale_percent_pos(touch.pos)
             if x > 1 or x < 0 or y > 1 or y < 0:
                 cpos = None
             else:
@@ -91,6 +136,8 @@ class DeviceDisplay(BoxLayout):
 
     t_end = NumericProperty(None, allownone=True)
 
+    t_last = NumericProperty(None, allownone=True)
+
     done = False
 
     graph: Graph = None
@@ -119,6 +166,8 @@ class DeviceDisplay(BoxLayout):
 
     active_channels = ListProperty([True, ] * 32)
 
+    channels_stats = []
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.fbind('log_z', self.recompute_bar)
@@ -127,6 +176,7 @@ class DeviceDisplay(BoxLayout):
         self.fbind('global_range', self.draw_data)
         self.fbind('t_start', self.draw_data)
         self.fbind('t_end', self.draw_data)
+        self.fbind('t_last', self.draw_data)
         self.fbind('active_channels', self.draw_data)
 
     def create_plot(self, graph):
@@ -173,7 +223,21 @@ class DeviceDisplay(BoxLayout):
     def time_to_index(self, t):
         if not self.t:
             return 0
-        return min(int(self.num_points * t / self.t), self.num_points - 1)
+        return max(
+            min(int(self.num_points * t / self.t), self.num_points - 1), 0)
+
+    def get_data_from_graph_pos(self, x_frac, y_frac):
+        data = self.get_visible_data()
+        if data is None:
+            return
+
+        n = data.shape[1]
+        i = min(int(x_frac * n), n - 1)
+        channel = min(int(y_frac * 32), 31)
+        value = data[channel, i]
+        t = (self.graph.xmax - self.graph.xmin) * x_frac + self.graph.xmin
+
+        return f'{t:0.1f}, {channel + 1}, {value:0.1f}'
 
     def get_data_indices_range(self):
         s = 0
@@ -184,20 +248,35 @@ class DeviceDisplay(BoxLayout):
         if self.t_end:
             e = self.time_to_index(self.t_end) + 1
 
+        if not self.t_start and self.t_last:
+            if self.t_end:
+                s = self.time_to_index(self.t_end - self.t_last)
+            else:
+                s = self.time_to_index(self.t - self.t_last)
+
         return s, e
 
-    def draw_data(self, *args):
+    def get_visible_data(self):
         data = self._data
+        if data is None:
+            return None
+        s, e = self.get_data_indices_range()
+        return data[:, s:e]
+
+    def draw_data(self, *args):
+        data = self.get_visible_data()
         if data is None:
             return
         inactive_channels = np.logical_not(
             np.asarray(self.active_channels, dtype=np.bool))
-        s, e = self.get_data_indices_range()
-        data = data[:, s:e]
 
         if self.auto_range or self.min_val is None or self.max_val is None:
             min_val = self.min_val = np.min(data, axis=1, keepdims=True)
             max_val = self.max_val = np.max(data, axis=1, keepdims=True)
+            for widget, mn, mx in zip(
+                    self.channels_stats, min_val[:, 0], max_val[:, 0]):
+                widget.min_val = mn.item()
+                widget.max_val = mx.item()
         else:
             min_val = self.min_val
             max_val = self.max_val
@@ -230,11 +309,9 @@ class DeviceDisplay(BoxLayout):
         self.plot.rgb_data = np_data[:, :, :3]
 
     def set_range_from_pos(self, open_pos, close_pos):
-        data = self._data
+        data = self.get_visible_data()
         if data is None or self.min_val is None or self.max_val is None:
             return
-        data_s, data_e = self.get_data_indices_range()
-        data = data[:, data_s:data_e]
 
         chan = self.range_chan
         n = data.shape[1]
@@ -255,6 +332,11 @@ class DeviceDisplay(BoxLayout):
         if chan == 'all':
             self.min_val = np.min(data[:, s:e], axis=1, keepdims=True)
             self.max_val = np.max(data[:, s:e], axis=1, keepdims=True)
+            for widget, mn, mx in zip(
+                    self.channels_stats, self.min_val[:, 0],
+                    self.max_val[:, 0]):
+                widget.min_val = mn.item()
+                widget.max_val = mx.item()
         else:
             if chan == 'mouse':
                 _, y = open_pos or close_pos
@@ -263,6 +345,9 @@ class DeviceDisplay(BoxLayout):
                 i = int(chan) - 1
             self.min_val[i, 0] = np.min(data[i, s:e])
             self.max_val[i, 0] = np.max(data[i, s:e])
+            widget = self.channels_stats[i]
+            widget.min_val = self.min_val[i, 0].item()
+            widget.max_val = self.max_val[i, 0].item()
 
         self.draw_data()
 
@@ -307,10 +392,27 @@ class DeviceDisplay(BoxLayout):
         self.done = True
 
     def add_channel_selection(self, container):
-        ChannelActiveButton = Factory.ChannelActiveButton
+        ChannelControl = Factory.ChannelControl
+        channels = self.channels_stats = []
         for i in range(32):
-            widget = ChannelActiveButton()
+            widget = ChannelControl()
             widget.dev = self
             widget.channel = i
-            widget.text = str(i)
             container.add_widget(widget)
+            channels.append(widget)
+
+    def set_channel_min_val(self, channel, value):
+        if self.min_val is None:
+            return
+
+        value = float(value)
+        self.min_val[channel, 0] = value
+        self.draw_data()
+
+    def set_channel_max_val(self, channel, value):
+        if self.max_val is None:
+            return
+
+        value = float(value)
+        self.max_val[channel, 0] = value
+        self.draw_data()

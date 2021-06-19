@@ -49,6 +49,7 @@
         size_hint_y: None
         height: '34dp'
         spacing: '5dp'
+        size_hint_min_x: self.minimum_width
         AccentThemedToggleButton:
             text: 'Virtual device'
             state: 'down' if root.virtual else 'normal'
@@ -89,6 +90,7 @@
         size_hint_y: None
         height: '34dp'
         spacing: '5dp'
+        size_hint_min_x: self.minimum_width
         AccentThemedToggleButton:
             text: 'logarithmic'
             state: 'down' if root.log_z else 'normal'
@@ -126,16 +128,23 @@
         FlatSizedTextInput:
             background_color: app.theme.primary_text
             size_hint_x: None
-            width: '100dp'
+            width: '80dp'
             on_focus: if not self.focus: root.t_start = float(self.text or 0)
-            hint_text: 'start t'
+            hint_text: 'start time'
             input_filter: 'float'
         FlatSizedTextInput:
             background_color: app.theme.primary_text
             size_hint_x: None
-            width: '100dp'
+            width: '80dp'
+            on_focus: if not self.focus: root.t_last = float(self.text or 0)
+            hint_text: 'n end sec'
+            input_filter: 'float'
+        FlatSizedTextInput:
+            background_color: app.theme.primary_text
+            size_hint_x: None
+            width: '80dp'
             on_focus: if not self.focus: root.t_end = float(self.text or 0)
-            hint_text: 'end t'
+            hint_text: 'end time'
             input_filter: 'float'
         ThemedLabel:
             size_hint_x: None
@@ -160,44 +169,80 @@
                 pos: self.pos
                 size: self.size
                 texture: root.scale_tex
-    ScrollView:
-        bar_width: '20'
-        scroll_type: ['bars']
-        SniffGraph:
-            on_kv_post: root.create_plot(self.__self__)
-            dev_display: root.__self__
-            size_hint: None, None
-            width: max(self.parent.width, dp(50 + root.num_points))
-            height: max(self.parent.height, dp(50 + 64))
-            xlabel: 'Time (s)'
-            ylabel: 'Sensor ID'
-            x_ticks_minor: 5
-            x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
-            y_ticks_major: 10
-            y_grid_label: True
-            x_grid_label: True
-            padding: 5
-            ymin: 1
-            ymax: 33
-            xmin: min(root.t_start or 0, root.t_end or root.t)
-            xmax: max(root.t_end or root.t, root.t_start or 0)
-            tick_color: app.theme.accent[:3]
-            border_color: app.theme.accent[:3]
-            label_options: {'color': app.theme.text_primary[:3], 'bold': True}
-            background_color: app.theme.primary_text
+    SniffGraph:
+        on_kv_post: root.create_plot(self.__self__)
+        dev_display: root.__self__
+        size_hint_min: '114dp', '114dp'
+        xlabel: 'Time (s)'
+        ylabel: 'Sensor ID'
+        x_ticks_minor: 5
+        x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
+        y_ticks_major: 10
+        y_grid_label: True
+        x_grid_label: True
+        padding: 5
+        ymin: 1
+        ymax: 33
+        xmin: max(min(root.t_start or ((root.t_end or root.t) - root.t_last if root.t_last else 0), root.t_end or root.t), 0)
+        xmax: max(root.t_end or root.t, root.t_start or 0)
+        tick_color: app.theme.accent[:3]
+        border_color: app.theme.accent[:3]
+        label_options: {'color': app.theme.text_primary[:3], 'bold': True}
+        background_color: app.theme.primary_text
 
 
-<ChannelActiveButton@AccentThemedToggleButton>:
+<ChannelControl@BoxLayout>:
     dev: None
     channel: 0
+    min_val: 0
+    max_val: 0
+    channel: 0
+    spacing: '10dp'
     size_hint: None, None
-    size: self.texture_size
-    padding: '40dp', '10dp'
-    state: 'down'
-    on_state: self.dev.active_channels[self.channel] = self.state == 'down'
+    size: self.minimum_size
+    padding: '10dp', 0
+    AccentThemedToggleButton:
+        size_hint: None, None
+        size: self.texture_size
+        padding: '40dp', '10dp'
+        state: 'down'
+        on_state: root.dev.active_channels[root.channel] = self.state == 'down'
+        text: str(root.channel + 1)
+    ThemedLabel:
+        size_hint_x: None
+        width: self.texture_size[0]
+        text: 'range: {:0.1f} - {:0.1f}'.format(root.min_val, root.max_val)
+    FlatSizedTextInput:
+        background_color: app.theme.primary_text
+        size_hint_x: None
+        width: '70dp'
+        on_focus: if not self.focus and self.text: root.dev.set_channel_min_val(root.channel, self.text)
+        hint_text: 'min'
+        input_filter: 'float'
+    ThemedLabel:
+        size_hint_x: None
+        width: self.texture_size[0]
+        text: ' - '
+    FlatSizedTextInput:
+        background_color: app.theme.primary_text
+        size_hint_x: None
+        width: '70dp'
+        on_focus: if not self.focus and self.text: root.dev.set_channel_max_val(root.channel, self.text)
+        hint_text: 'max'
+        input_filter: 'float'
 
 
 <ChannelSelection@FlatDropDown>:
     flat_color: app.theme.primary_text
     flat_border_color: app.theme.divider
     do_scroll: False, True
+
+
+<GraphPosLabel@ThemedSizedLabel>:
+    padding: '10dp', '10dp'
+    canvas.before:
+        Color:
+            rgba: app.theme.primary_text
+        Rectangle:
+            size: self.size
+            pos: self.pos
