@@ -4,12 +4,13 @@ from matplotlib import cm
 from kivy_trio.to_trio import kivy_run_in_async, mark, KivyEventCancelled
 from pymoa_remote.threading import ThreadExecutor
 from base_kivy_app.app import app_error
-from kivy_garden.graph import Graph, ContourPlot
+from kivy_garden.graph import Graph, ContourPlot, LinePlot
 
 from kivy.metrics import dp
 from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
     NumericProperty, ListProperty
 from kivy.uix.boxlayout import BoxLayout
+from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.factory import Factory
 from kivy.uix.widget import Widget
@@ -26,6 +27,10 @@ class SniffGraph(Graph):
     dev_display: 'DeviceDisplay' = None
 
     pos_label: Widget = None
+
+    visible = BooleanProperty(False)
+
+    is_3d = True
 
     def _scale_percent_pos(self, pos):
         w, h = self.view_size
@@ -61,7 +66,10 @@ class SniffGraph(Graph):
         from kivy.core.window import Window
         pos = self.to_parent(*self.to_widget(*Window.mouse_pos))
 
-        if not self.collide_point(*pos):
+        if not self.visible or \
+                len(Window.children) > 1 and \
+                Window.children[0] is not self.pos_label or \
+                not self.collide_point(*pos):
             self.hide_pos_label()
             return
 
@@ -71,7 +79,7 @@ class SniffGraph(Graph):
             return
 
         self.show_pos_label()
-        text = self.dev_display.get_data_from_graph_pos(x, y)
+        text = self.dev_display.get_data_from_graph_pos(x, y, self.is_3d)
         if text:
             self.pos_label.text = text
             x_pos, y_pos = Window.mouse_pos
@@ -111,7 +119,7 @@ class SniffGraph(Graph):
                 cpos = x, y
 
         if opos or cpos:
-            self.dev_display.set_range_from_pos(opos, cpos)
+            self.dev_display.set_range_from_pos(opos, cpos, self.is_3d)
             return True
         return False
 
@@ -140,9 +148,13 @@ class DeviceDisplay(BoxLayout):
 
     done = False
 
-    graph: Graph = None
+    graph_3d: Graph = None
 
-    plot: ContourPlot = None
+    plot_3d: ContourPlot = None
+
+    graph_2d: Graph = None
+
+    plots_2d: List[LinePlot] = []
 
     _data: np.ndarray = None
 
@@ -168,25 +180,46 @@ class DeviceDisplay(BoxLayout):
 
     channels_stats = []
 
+    _draw_trigger = None
+
+    _plot_colors = []
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._plot_colors = cm.get_cmap('tab20').colors + \
+                            cm.get_cmap('tab20b').colors
+        self._draw_trigger = Clock.create_trigger(self.draw_data)
         self.fbind('log_z', self.recompute_bar)
-        self.fbind('log_z', self.draw_data)
-        self.fbind('auto_range', self.draw_data)
-        self.fbind('global_range', self.draw_data)
-        self.fbind('t_start', self.draw_data)
-        self.fbind('t_end', self.draw_data)
-        self.fbind('t_last', self.draw_data)
-        self.fbind('active_channels', self.draw_data)
+        self.fbind('log_z', self._draw_trigger)
+        self.fbind('auto_range', self._draw_trigger)
+        self.fbind('global_range', self._draw_trigger)
+        self.fbind('t_start', self._draw_trigger)
+        self.fbind('t_end', self._draw_trigger)
+        self.fbind('t_last', self._draw_trigger)
+        self.fbind('active_channels', self._draw_trigger)
 
-    def create_plot(self, graph):
-        self.graph = graph
-        self.plot = plot = ContourPlot()
+    def create_plot(self, graph_3d, graph_2d):
+        self.graph_3d = graph_3d
+        self.plot_3d = plot = ContourPlot()
         plot.mag_filter = 'nearest'
         plot.min_filter = 'nearest'
-        graph.add_plot(plot)
+        graph_3d.add_plot(plot)
 
         self.recompute_bar()
+
+        self.graph_2d = graph_2d
+        self.plots_2d = plots = []
+        for i in range(32):
+            plot = LinePlot(color=self._plot_colors[i], line_width=dp(2))
+            graph_2d.add_plot(plot)
+            plots.append(plot)
+
+    def show_hide_channel(self, channel, visible):
+        self.active_channels[channel] = visible
+        if visible:
+            self.graph_2d.add_plot(self.plots_2d[channel])
+        else:
+            self.graph_2d.remove_plot(self.plots_2d[channel])
 
     def recompute_bar(self, *args):
         tex = self.scale_tex = Texture.create(size=(250, 1), colorfmt='rgb')
@@ -204,21 +237,23 @@ class DeviceDisplay(BoxLayout):
         if self._ts is None:
             self._ts = device.timestamp
             self._data = np.empty(
-                (len(device.sensors_data), 10), dtype=np.float)
+                (len(device.sensors_data) + 1, 10), dtype=np.float)
 
         data = self._data
         self.t = device.timestamp - self._ts
-        data[:, self.num_points] = device.sensors_data
+        data[:32, self.num_points] = device.sensors_data
+        data[32, self.num_points] = device.timestamp - self._ts
         self.num_points += 1
 
         s = data.shape[1]
         if self.num_points == s:
             self._data = np.concatenate(
-                (data, np.empty((len(device.sensors_data), s), dtype=np.float)),
+                (data,
+                 np.empty((len(device.sensors_data) + 1, s), dtype=np.float)),
                 axis=1
             )
 
-        self.draw_data()
+        self._draw_trigger()
 
     def time_to_index(self, t):
         if not self.t:
@@ -226,18 +261,30 @@ class DeviceDisplay(BoxLayout):
         return max(
             min(int(self.num_points * t / self.t), self.num_points - 1), 0)
 
-    def get_data_from_graph_pos(self, x_frac, y_frac):
+    def get_data_from_graph_pos(self, x_frac, y_frac, plot_3d):
         data = self.get_visible_data()
         if data is None:
             return
 
         n = data.shape[1]
         i = min(int(x_frac * n), n - 1)
-        channel = min(int(y_frac * 32), 31)
-        value = data[channel, i]
-        t = (self.graph.xmax - self.graph.xmin) * x_frac + self.graph.xmin
+        t = (self.graph_3d.xmax - self.graph_3d.xmin) * x_frac + \
+            self.graph_3d.xmin
+        if plot_3d:
+            channel = min(int(y_frac * 32), 31)
+            value = data[channel, i]
+            return f'{t:0.1f}, {channel + 1}, {value:0.1f}'
 
-        return f'{t:0.1f}, {channel + 1}, {value:0.1f}'
+        if self.range_chan in ('mouse', 'all'):
+            if self.log_z:
+                y_frac = (np.power(10, y_frac) - 1) / 9
+            y = (self.graph_2d.ymax - self.graph_2d.ymin) * y_frac + \
+                self.graph_2d.ymin
+            return f'{t:0.1f}, {y:0.3f}'
+
+        channel = int(self.range_chan)
+        value = data[channel - 1, i]
+        return f'{t:0.1f}, {channel}, {value:0.1f}'
 
     def get_data_indices_range(self):
         s = 0
@@ -271,8 +318,8 @@ class DeviceDisplay(BoxLayout):
             np.asarray(self.active_channels, dtype=np.bool))
 
         if self.auto_range or self.min_val is None or self.max_val is None:
-            min_val = self.min_val = np.min(data, axis=1, keepdims=True)
-            max_val = self.max_val = np.max(data, axis=1, keepdims=True)
+            min_val = self.min_val = np.min(data[:32, :], axis=1, keepdims=True)
+            max_val = self.max_val = np.max(data[:32, :], axis=1, keepdims=True)
             for widget, mn, mx in zip(
                     self.channels_stats, min_val[:, 0], max_val[:, 0]):
                 widget.min_val = mn.item()
@@ -283,32 +330,40 @@ class DeviceDisplay(BoxLayout):
 
         if self.global_range:
             # reduce to scalar
-            min_val = np.min(min_val)
-            max_val = np.max(max_val)
-            zero_range = min_val == max_val
-            print(min_val, max_val, zero_range)
-        else:
-            zero_range = min_val[:, 0] == max_val[:, 0]
+            min_val[:, 0] = np.min(min_val)
+            max_val[:, 0] = np.max(max_val)
+        zero_range = min_val[:, 0] == max_val[:, 0]
 
-        scaled_data = np.clip(data, min_val, max_val) - min_val
+        scaled_data = np.clip(data[:32, :], min_val, max_val) - min_val
         max_val = max_val - min_val
 
-        if self.log_z:
-            # min val will be 1 (log 1 == 0)
-            max_val = np.log(max_val + 1)
-            scaled_data = np.log(scaled_data + 1)
-
-        scaled_data[zero_range] = 0
-        not_zero = np.logical_not(zero_range)
-
-        scaled_data[not_zero] /= max_val[not_zero]
-
         scaled_data[inactive_channels, :] = 0
+        scaled_data[zero_range, :] = 0
+        not_zero = np.logical_not(np.logical_or(zero_range, inactive_channels))
+
+        times = data[32, :].tolist()
+        log_z = self.log_z
+        for i, plot in enumerate(self.plots_2d):
+            if not_zero[i]:
+                d = scaled_data[i, :] / max_val[i, 0]
+                if log_z:
+                    d = d * .9 + .1
+                plot.points = list(zip(times, d.tolist()))
+            else:
+                plot.points = []
+
+        if np.any(not_zero):
+            if log_z:
+                # min val will be 1 (log 1 == 0)
+                max_val = np.log10(max_val + 1)
+                scaled_data[not_zero] = np.log10(scaled_data[not_zero] + 1)
+
+            scaled_data[not_zero] /= max_val[not_zero]
 
         np_data = cm.get_cmap()(scaled_data, bytes=True)
-        self.plot.rgb_data = np_data[:, :, :3]
+        self.plot_3d.rgb_data = np_data[:, :, :3]
 
-    def set_range_from_pos(self, open_pos, close_pos):
+    def set_range_from_pos(self, open_pos, close_pos, plot_3d):
         data = self.get_visible_data()
         if data is None or self.min_val is None or self.max_val is None:
             return
@@ -329,9 +384,9 @@ class DeviceDisplay(BoxLayout):
             s, e = e, s
         e += 1
 
-        if chan == 'all':
-            self.min_val = np.min(data[:, s:e], axis=1, keepdims=True)
-            self.max_val = np.max(data[:, s:e], axis=1, keepdims=True)
+        if chan == 'all' or chan == 'mouse' and not plot_3d:
+            self.min_val = np.min(data[:32, s:e], axis=1, keepdims=True)
+            self.max_val = np.max(data[:32, s:e], axis=1, keepdims=True)
             for widget, mn, mx in zip(
                     self.channels_stats, self.min_val[:, 0],
                     self.max_val[:, 0]):
@@ -349,7 +404,7 @@ class DeviceDisplay(BoxLayout):
             widget.min_val = self.min_val[i, 0].item()
             widget.max_val = self.max_val[i, 0].item()
 
-        self.draw_data()
+        self._draw_trigger()
 
     async def run_device(self):
         async with ThreadExecutor() as executor:
@@ -398,6 +453,7 @@ class DeviceDisplay(BoxLayout):
             widget = ChannelControl()
             widget.dev = self
             widget.channel = i
+            widget.plot_color = self._plot_colors[i]
             container.add_widget(widget)
             channels.append(widget)
 
@@ -407,7 +463,7 @@ class DeviceDisplay(BoxLayout):
 
         value = float(value)
         self.min_val[channel, 0] = value
-        self.draw_data()
+        self._draw_trigger()
 
     def set_channel_max_val(self, channel, value):
         if self.max_val is None:
@@ -415,4 +471,4 @@ class DeviceDisplay(BoxLayout):
 
         value = float(value)
         self.max_val[channel, 0] = value
-        self.draw_data()
+        self._draw_trigger()

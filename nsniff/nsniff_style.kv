@@ -1,4 +1,5 @@
 #:import math math
+#:import NoTransition kivy.uix.screenmanager.NoTransition
 
 <MainView@BoxLayout>:
     orientation: 'vertical'
@@ -113,6 +114,24 @@
             padding_x: '10dp'
             on_state: root.global_range = self.state == 'down'
         Widget
+        AccentThemedToggleButton:
+            id: plot_3d_button
+            text: '3D'
+            size_hint_x: None
+            width: self.texture_size[0]
+            padding_x: '10dp'
+            state: 'down'
+            on_state:
+                plot_2d_button.state = 'normal' if self.state == 'down' else 'down'
+                manager.current = '3d' if self.state == 'down' else '2d'
+        AccentThemedToggleButton:
+            id: plot_2d_button
+            text: '2D'
+            size_hint_x: None
+            width: self.texture_size[0]
+            padding_x: '10dp'
+            on_state: plot_3d_button.state = 'normal' if self.state == 'down' else 'down'
+        Widget
         AccentThemedButton:
             channel_selection: channel_selection.__self__
             text: 'Channels'
@@ -125,6 +144,23 @@
                 on_kv_post:
                     root.add_channel_selection(self)
                     self.parent.remove_widget(self)
+                BoxLayout:
+                    spacing: '10dp'
+                    size_hint: None, None
+                    size: self.minimum_size
+                    padding: '10dp'
+                    AccentThemedButton:
+                        size_hint: None, None
+                        size: self.texture_size
+                        padding: '10dp', '10dp'
+                        on_state: for widget in root.channels_stats: widget.ids.state.state = 'down'
+                        text: 'Show all'
+                    AccentThemedButton:
+                        size_hint: None, None
+                        size: self.texture_size
+                        padding: '10dp', '10dp'
+                        on_state: for widget in root.channels_stats: widget.ids.state.state = 'normal'
+                        text: 'Hide all'
         FlatSizedTextInput:
             background_color: app.theme.primary_text
             size_hint_x: None
@@ -169,26 +205,59 @@
                 pos: self.pos
                 size: self.size
                 texture: root.scale_tex
-    SniffGraph:
-        on_kv_post: root.create_plot(self.__self__)
-        dev_display: root.__self__
+    ScreenManager:
+        id: manager
         size_hint_min: '114dp', '114dp'
-        xlabel: 'Time (s)'
-        ylabel: 'Sensor ID'
-        x_ticks_minor: 5
-        x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
-        y_ticks_major: 10
-        y_grid_label: True
-        x_grid_label: True
-        padding: 5
-        ymin: 1
-        ymax: 33
-        xmin: max(min(root.t_start or ((root.t_end or root.t) - root.t_last if root.t_last else 0), root.t_end or root.t), 0)
-        xmax: max(root.t_end or root.t, root.t_start or 0)
-        tick_color: app.theme.accent[:3]
-        border_color: app.theme.accent[:3]
-        label_options: {'color': app.theme.text_primary[:3], 'bold': True}
-        background_color: app.theme.primary_text
+        on_kv_post: root.create_plot(plot_3d.__self__, plot_2d.__self__)
+        transition: NoTransition()
+        Screen:
+            name: '3d'
+            SniffGraph:
+                id: plot_3d
+                dev_display: root.__self__
+                visible: manager.current == '3d'
+                is_3d: True
+                xlabel: 'Time (s)'
+                ylabel: 'Sensor ID'
+                x_ticks_minor: 5
+                x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
+                y_ticks_major: 10
+                y_grid_label: True
+                x_grid_label: True
+                padding: 5
+                ymin: 1
+                ymax: 33
+                xmin: max(min(root.t_start or ((root.t_end or root.t) - root.t_last if root.t_last else 0), root.t_end or root.t), 0)
+                xmax: max(root.t_end or root.t, root.t_start or 0)
+                tick_color: app.theme.accent[:3]
+                border_color: app.theme.accent[:3]
+                label_options: {'color': app.theme.text_primary[:3], 'bold': True}
+                background_color: app.theme.primary_text
+        Screen:
+            name: '2d'
+            SniffGraph:
+                id: plot_2d
+                dev_display: root.__self__
+                visible: manager.current == '2d'
+                is_3d: False
+                xlabel: 'Time (s)'
+                ylabel: 'Normalized value'
+                x_ticks_minor: 5
+                x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
+                y_ticks_major: (self.ymax - self.ymin) / max(self.height / dp(200), 1)
+                y_ticks_minor: 2 if root.log_z else 0
+                y_grid_label: True
+                x_grid_label: True
+                padding: 5
+                ymin: .1 if root.log_z else 0
+                ymax: 1
+                ylog: root.log_z
+                xmin: max(min(root.t_start or ((root.t_end or root.t) - root.t_last if root.t_last else 0), root.t_end or root.t), 0)
+                xmax: max(root.t_end or root.t, root.t_start or 0)
+                tick_color: app.theme.accent[:3]
+                border_color: app.theme.accent[:3]
+                label_options: {'color': app.theme.text_primary[:3], 'bold': True}
+                background_color: app.theme.primary_text
 
 
 <ChannelControl@BoxLayout>:
@@ -201,12 +270,23 @@
     size_hint: None, None
     size: self.minimum_size
     padding: '10dp', 0
+    plot_color: 1, 1, 1
+    Widget:
+        size_hint_x: None
+        width: '40dp'
+        canvas:
+            Color:
+                rgb: root.plot_color or (1, 1, 1)
+            Rectangle:
+                size: self.size
+                pos: self.pos
     AccentThemedToggleButton:
+        id: state
         size_hint: None, None
         size: self.texture_size
         padding: '40dp', '10dp'
         state: 'down'
-        on_state: root.dev.active_channels[root.channel] = self.state == 'down'
+        on_state: root.dev.show_hide_channel(root.channel, self.state == 'down')
         text: str(root.channel + 1)
     ThemedLabel:
         size_hint_x: None
