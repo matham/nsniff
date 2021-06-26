@@ -1,7 +1,7 @@
 #:import math math
 #:import NoTransition kivy.uix.screenmanager.NoTransition
 
-<MainView@BoxLayout>:
+<MainView>:
     orientation: 'vertical'
     spacing: '5dp'
     canvas:
@@ -12,15 +12,39 @@
             size: self.size
     StackLayout:
         size_hint_y: None
-        height: '34dp'
+        height: '44dp'
         orientation: 'lr-tb'
-        padding: '10dp', 0
+        padding: '10dp', '5dp'
+        spacing: '5dp'
         canvas:
             Color:
                 rgba: app.theme.primary
             Rectangle:
                 pos: self.pos
                 size: self.size
+        AccentThemedButton:
+            disabled: bool(app.filename)
+            text: 'Add device'
+            size_hint_x: None
+            width: self.texture_size[0]
+            padding_x: '10dp'
+            on_release: app.add_device()
+        FlatDivider:
+            color: app.theme.divider
+        FlatImageButton:
+            disabled: bool(app.filename)
+            scale_down_color: True
+            source: 'flat_save.png'
+            flat_color: app.theme.accent
+            hover_text: "Log to file"
+            on_release: app.open_filechooser(callback=app.save_file_callback, mode='save', target=app.last_directory, title='Log to csv file', filters=['*.csv', '*.*'])
+        FlatImageButton:
+            disabled: not app.filename
+            scale_down_color: True
+            source: 'flat_stop.png'
+            flat_color: app.theme.accent
+            on_release: app.close_file()
+            hover_text: 'Stop logging'
         FlatDivider:
             color: app.theme.divider
         FlatLabel:
@@ -36,16 +60,57 @@
             flat_color: app.theme.accent
             on_kv_post: app.error_indicator = self
             on_release: self.count = 0
-    BoxLayout:
-        orientation: 'horizontal'
-        DeviceDisplay
+        FlatDivider:
+            color: app.theme.divider
+        FlatSizedTextInput:
+            disabled: not app.filename
+            id: event_name
+            background_color: app.theme.primary_text
+            size_hint_x: None
+            width: '100dp'
+            hint_text: 'event name'
+        AccentThemedButton:
+            disabled: not app.filename
+            text: 'Add event'
+            size_hint_x: None
+            width: self.texture_size[0]
+            padding_x: '10dp'
+            on_release: app.log_event(event_name.text)
+            canvas:
+                Color:
+                    rgba: 1, .47, .39, (1 if app.global_focus else 0)
+                Line:
+                    width: 1
+                    points: [self.x, self.y, self.right, self.y, self.right, self.top, self.x, self.top, self.x, self.y]
+    ScrollView:
+        bar_width: '15dp'
+        scroll_type: ['bars']
+        do_scroll_x: False
+        always_overscroll: False
+        BoxLayout:
+            id: dev_container
+            orientation: 'vertical'
+            spacing: '10dp'
+            size_hint_y: None
+            height: len(self.children) * self.parent.height
+            canvas:
+                Color:
+                    rgba: app.theme.primary
+                Rectangle:
+                    pos: self.pos
+                    size: self.size
 
 
 <DeviceDisplay>:
     orientation: 'vertical'
-    on_kv_post: app.device = self.__self__
     spacing: '5dp'
-    padding: '10dp', 0
+    padding: '20dp', '5dp'
+    canvas:
+        Color:
+            rgba: app.theme.primary_text
+        Rectangle:
+            pos: self.pos
+            size: self.size
     BoxLayout:
         size_hint_y: None
         height: '34dp'
@@ -87,6 +152,13 @@
             size_hint_x: None
             width: self.texture_size[0]
             text: 'Clock: {:0.1f}'.format(root.t)
+        FlatImageButton:
+            disabled: bool(app.filename)
+            scale_down_color: True
+            source: 'flat_delete.png'
+            flat_color: app.theme.accent
+            hover_text: 'Delete device'
+            on_release: app.remove_device(root.__self__)
     BoxLayout:
         size_hint_y: None
         height: '34dp'
@@ -165,21 +237,21 @@
             background_color: app.theme.primary_text
             size_hint_x: None
             width: '80dp'
-            on_focus: if not self.focus: root.t_start = float(self.text or 0)
+            on_focus: if not self.focus: root.t_start = float(self.text) if self.text else None
             hint_text: 'start time'
             input_filter: 'float'
         FlatSizedTextInput:
             background_color: app.theme.primary_text
             size_hint_x: None
             width: '80dp'
-            on_focus: if not self.focus: root.t_last = float(self.text or 0)
+            on_focus: if not self.focus: root.t_last = float(self.text) if self.text else None
             hint_text: 'n end sec'
             input_filter: 'float'
         FlatSizedTextInput:
             background_color: app.theme.primary_text
             size_hint_x: None
             width: '80dp'
-            on_focus: if not self.focus: root.t_end = float(self.text or 0)
+            on_focus: if not self.focus: root.t_end = float(self.text) if self.text else None
             hint_text: 'end time'
             input_filter: 'float'
         ThemedLabel:
@@ -220,15 +292,13 @@
                 xlabel: 'Time (s)'
                 ylabel: 'Sensor ID'
                 x_ticks_minor: 5
-                x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
+                x_ticks_major: max(round((self.xmax - self.xmin) / max(self.width / dp(200), 1)), 0)
                 y_ticks_major: 10
                 y_grid_label: True
                 x_grid_label: True
                 padding: 5
                 ymin: 1
                 ymax: 33
-                xmin: max(min(root.t_start or ((root.t_end or root.t) - root.t_last if root.t_last else 0), root.t_end or root.t), 0)
-                xmax: max(root.t_end or root.t, root.t_start or 0)
                 tick_color: app.theme.accent[:3]
                 border_color: app.theme.accent[:3]
                 label_options: {'color': app.theme.text_primary[:3], 'bold': True}
@@ -243,7 +313,7 @@
                 xlabel: 'Time (s)'
                 ylabel: 'Normalized value'
                 x_ticks_minor: 5
-                x_ticks_major: round((self.xmax - self.xmin) / max(self.width / dp(200), 1))
+                x_ticks_major: max(round((self.xmax - self.xmin) / max(self.width / dp(200), 1)), 0)
                 y_ticks_major: (self.ymax - self.ymin) / max(self.height / dp(200), 1)
                 y_ticks_minor: 2 if root.log_z else 0
                 y_grid_label: True
@@ -252,8 +322,6 @@
                 ymin: .1 if root.log_z else 0
                 ymax: 1
                 ylog: root.log_z
-                xmin: max(min(root.t_start or ((root.t_end or root.t) - root.t_last if root.t_last else 0), root.t_end or root.t), 0)
-                xmax: max(root.t_end or root.t, root.t_start or 0)
                 tick_color: app.theme.accent[:3]
                 border_color: app.theme.accent[:3]
                 label_options: {'color': app.theme.text_primary[:3], 'bold': True}

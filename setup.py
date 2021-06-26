@@ -22,7 +22,7 @@ setup(
                  ],
     packages=find_packages(),
     install_requires=[
-        'base_kivy_app', 'kivy', 'nixio==1.4.9', 'pyserial',
+        'base_kivy_app', 'kivy', 'pyserial',
         'kivy_garden.graph', 'trio', 'pymoa-remote', 'pymoa',
         'tree-config', 'kivy_trio', 'matplotlib'],
     extras_require={

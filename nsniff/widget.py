@@ -126,6 +126,8 @@ class SniffGraph(Graph):
 
 class DeviceDisplay(BoxLayout):
 
+    __events__ = ('on_data_update', )
+
     _config_props_ = (
         'com_port', 'virtual', 'log_z', 'auto_range', 'global_range',
         'range_chan')
@@ -137,6 +139,8 @@ class DeviceDisplay(BoxLayout):
     virtual = BooleanProperty(False)
 
     notes = StringProperty('')
+
+    t0 = NumericProperty(0)
 
     t = NumericProperty(0)
 
@@ -160,8 +164,6 @@ class DeviceDisplay(BoxLayout):
 
     num_points: int = NumericProperty(0)
 
-    _ts = None
-
     log_z = BooleanProperty(False)
 
     auto_range = BooleanProperty(True)
@@ -182,12 +184,14 @@ class DeviceDisplay(BoxLayout):
 
     _draw_trigger = None
 
+    _t_trigger = None
+
     _plot_colors = []
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self._plot_colors = cm.get_cmap('tab20').colors + \
                             cm.get_cmap('tab20b').colors
+        super().__init__(**kwargs)
         self._draw_trigger = Clock.create_trigger(self.draw_data)
         self.fbind('log_z', self.recompute_bar)
         self.fbind('log_z', self._draw_trigger)
@@ -197,6 +201,33 @@ class DeviceDisplay(BoxLayout):
         self.fbind('t_end', self._draw_trigger)
         self.fbind('t_last', self._draw_trigger)
         self.fbind('active_channels', self._draw_trigger)
+
+        self._t_trigger = Clock.create_trigger(self._set_graph_t_axis)
+        self.fbind('t_start', self._t_trigger)
+        self.fbind('t_end', self._t_trigger)
+        self.fbind('t_last', self._t_trigger)
+        self.fbind('t0', self._t_trigger)
+        self.fbind('t', self._t_trigger)
+
+    def _set_graph_t_axis(self, *args):
+        xmax = self.t_end if self.t_end is not None else self.t
+        if self.t_start is not None:
+            xmin = self.t_start
+        elif self.t_last is not None:
+            xmin = xmax - self.t_last
+        else:
+            xmin = self.t0
+
+        if xmin > xmax:
+            xmin = xmax
+
+        self.graph_2d.xmin = xmin
+        self.graph_2d.xmax = xmax
+        self.graph_3d.xmin = max(min(xmin, self.t), self.t0)
+        self.graph_3d.xmax = max(min(xmax, self.t), self.t0)
+
+    def on_data_update(self, instance):
+        pass
 
     def create_plot(self, graph_3d, graph_2d):
         self.graph_3d = graph_3d
@@ -234,15 +265,17 @@ class DeviceDisplay(BoxLayout):
         tex.blit_buffer(data.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
 
     def process_data(self, device: StratuscentBase):
-        if self._ts is None:
-            self._ts = device.timestamp
+        self.dispatch('on_data_update', self)
+
+        if self._data is None:
+            self.t0 = device.timestamp
             self._data = np.empty(
                 (len(device.sensors_data) + 1, 10), dtype=np.float)
 
         data = self._data
-        self.t = device.timestamp - self._ts
+        self.t = device.timestamp
         data[:32, self.num_points] = device.sensors_data
-        data[32, self.num_points] = device.timestamp - self._ts
+        data[32, self.num_points] = device.timestamp
         self.num_points += 1
 
         s = data.shape[1]
@@ -256,10 +289,15 @@ class DeviceDisplay(BoxLayout):
         self._draw_trigger()
 
     def time_to_index(self, t):
-        if not self.t:
+        if self._data is None:
             return 0
-        return max(
-            min(int(self.num_points * t / self.t), self.num_points - 1), 0)
+        n = self.num_points
+        t0 = self.t0
+        total_t = self._data[32, n - 1] - t0
+        if not total_t:
+            return 0
+
+        return max(min(int(n * (t - t0) / total_t), n - 1), 0)
 
     def get_data_from_graph_pos(self, x_frac, y_frac, plot_3d):
         data = self.get_visible_data()
@@ -421,7 +459,7 @@ class DeviceDisplay(BoxLayout):
     def start(self):
         self._data = None
         self.num_points = 0
-        self._ts = None
+        self.t0 = 0
         self.done = False
         self.min_val = self.max_val = None
         self.t_start = None
@@ -472,3 +510,13 @@ class DeviceDisplay(BoxLayout):
         value = float(value)
         self.max_val[channel, 0] = value
         self._draw_trigger()
+
+    @staticmethod
+    def get_data_header():
+        return StratuscentBase.get_data_header()
+
+    def add_event(self, t, name):
+        for graph in (self.graph_2d, self.graph_3d):
+            p = LinePlot(color=(0, 0, 0), line_width=dp(3))
+            p.points = [(t, .1), (t, 1)]
+            graph.add_plot(p)

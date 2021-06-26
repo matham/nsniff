@@ -1,5 +1,11 @@
-device:
-  auto_range: true
+devices:
+- auto_range: true
+  com_port: ''
+  global_range: false
+  log_z: false
+  range_chan: all
+  virtual: true
+- auto_range: true
   com_port: ''
   global_range: false
   log_z: false

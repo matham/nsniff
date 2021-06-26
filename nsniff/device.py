@@ -60,6 +60,19 @@ class StratuscentBase(Device):
     def read_sensor_values(self):
         raise NotImplementedError
 
+    @staticmethod
+    def get_data_header():
+        return ['t'] + [f'{i}' for i in range(32)] + [
+            'precision_resistor', 'temp', 'humidity', 'id']
+
+    def get_data_row(self):
+        return [self.timestamp] + self.sensors_data + [
+            self.precision_resistor, self.temp, self.humidity, self.device_id]
+
+    @staticmethod
+    def get_time():
+        return perf_counter()
+
 
 class StratuscentSensor(StratuscentBase):
 
@@ -108,7 +121,7 @@ class StratuscentSensor(StratuscentBase):
 
             int_vals = list(map(int, items[:-3]))
             float_vals = [float(items[-3]), float(items[-2])]
-            yield int_vals + float_vals + items[-1:], perf_counter()
+            yield int_vals + float_vals + items[-1:], self.get_time()
 
 
 class VirtualStratuscentSensor(StratuscentBase):
@@ -142,15 +155,15 @@ class VirtualStratuscentSensor(StratuscentBase):
         sensors = [random() * 1_000_000 for _ in range(27)] + [1_000_000.] * 5
         shuffle(sensors)
 
-        ts = perf_counter()
+        ts = self.get_time()
         n_samples = 0
         while True:
             yield [p_resistor] + sensors + [temp, humidity, dev_id], \
-                  perf_counter()
+                  self.get_time()
             n_samples += 1
 
             # wait for new samples
-            while (perf_counter() - ts) * rate < n_samples:
+            while (self.get_time() - ts) * rate < n_samples:
                 sleep(.1)
 
             temp = walk(temp, .1, 15., 30.)

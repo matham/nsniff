@@ -1,19 +1,66 @@
-from os.path import join, dirname
+from os.path import join, dirname, exists
 import trio
 from base_kivy_app.app import BaseKivyApp, run_app_async as run_app_async_base
 from base_kivy_app.graphics import HighightButtonBehavior
+from typing import List, IO, Dict, Set
+from tree_config import apply_config
+from string import ascii_letters, digits
 
 from kivy.lang import Builder
 from kivy.factory import Factory
-from kivy.properties import ObjectProperty, StringProperty
+from kivy.properties import ObjectProperty, StringProperty, BooleanProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.behaviors.focus import FocusBehavior
 
 from kivy_trio.context import kivy_trio_context_manager
 
 import nsniff
 from nsniff.widget import DeviceDisplay
-
+from nsniff.device import StratuscentBase
 
 __all__ = ('NSniffApp', 'run_app')
+
+
+class MainView(FocusBehavior, BoxLayout):
+    """The root widget displayed in the GUI.
+    """
+
+    app: 'NSniffApp' = None
+
+    keyboard_chars: Set[str] = set()
+
+    valid_chars = set(ascii_letters + digits)
+
+    def __init__(self, app, **kwargs):
+        super(MainView, self).__init__(**kwargs)
+        self.ctrl_chars = set()
+        self.app = app
+
+    def on_focus(self, *args):
+        self.app.global_focus = self.focus
+
+    def keyboard_on_key_down(self, window, keycode, text, modifiers):
+        if super(MainView, self).keyboard_on_key_down(
+                window, keycode, text, modifiers):
+            return True
+
+        if keycode[1] not in self.valid_chars:
+            return False
+
+        if self.app.filename:
+            self.keyboard_chars.add(keycode[1])
+            self.app.log_event(text, display=True)
+            return True
+        return False
+
+    def keyboard_on_key_up(self, window, keycode):
+        if super(MainView, self).keyboard_on_key_up(window, keycode):
+            return True
+
+        if keycode[1] in self.keyboard_chars:
+            self.keyboard_chars.remove(keycode[1])
+            return True
+        return False
 
 
 class NSniffApp(BaseKivyApp):
@@ -24,7 +71,7 @@ class NSniffApp(BaseKivyApp):
         'last_directory',
     )
 
-    _config_children_ = {'device': 'device'}
+    _config_children_ = {'devices': 'devices'}
 
     last_directory = StringProperty('~')
     """The last directory opened in the GUI.
@@ -41,12 +88,22 @@ class NSniffApp(BaseKivyApp):
     and shows a prompt with yes/no options and callback.
     '''
 
-    filename: str = ''
+    filename: str = StringProperty('')
 
-    device: DeviceDisplay = None
+    devices: List[DeviceDisplay] = []
+
+    _log_file: IO = None
+
+    _devices_data = []
+
+    _devices_n_cols: List[int] = []
+
+    global_focus = BooleanProperty(False)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.devices = []
+        self.fbind('filename', self.set_tittle)
 
     def load_app_kv(self):
         """Loads the app's kv files, if not yet loaded.
@@ -62,15 +119,31 @@ class NSniffApp(BaseKivyApp):
         self.load_app_kv()
         self.yesno_prompt = Factory.FlatYesNoPrompt()
 
-        root = Factory.get('MainView')()
+        root = MainView(app=self)
         return super().build(root)
 
     def on_start(self):
         self.set_tittle()
         HighightButtonBehavior.init_class()
 
+        self.add_device()
+
         self.load_app_settings_from_file()
         self.apply_app_settings()
+
+    def apply_config_child(self, name, prop, obj, config):
+        if prop == 'devices':
+            if len(config) >= len(self.devices):
+                for _ in range(len(config) - len(self.devices)):
+                    self.add_device()
+            else:
+                for _ in range(len(self.devices) - len(config)):
+                    self.remove_device(self.devices[-1])
+
+            for dev, conf in zip(self.devices, config):
+                apply_config(dev, conf)
+        else:
+            apply_config(obj, config)
 
     def set_tittle(self, *largs):
         """Periodically called by the Kivy Clock to update the title.
@@ -96,13 +169,121 @@ class NSniffApp(BaseKivyApp):
         super().clean_up()
         HighightButtonBehavior.uninit_class()
         self.dump_app_settings_to_file()
-        if self.device is not None:
-            self.device.stop()
-            self.device = None
+        for dev in self.devices:
+            dev.stop()
+
+        self.close_file()
 
     async def async_run(self, *args, **kwargs):
         with kivy_trio_context_manager():
             await super().async_run(*args, **kwargs)
+
+    def add_device(self) -> None:
+        if self.filename:
+            raise TypeError('Cannot add device while saving data')
+
+        dev = DeviceDisplay()
+        self.root.ids.dev_container.add_widget(dev)
+        self.devices.append(dev)
+
+    def remove_device(self, device: DeviceDisplay) -> None:
+        if self.filename:
+            raise TypeError('Cannot remove device while saving data')
+
+        self.root.ids.dev_container.remove_widget(device)
+        self.devices.remove(device)
+
+    def log_event(self, name, display=False):
+        if display:
+            self.root.ids.event_name.text = name
+
+        t = StratuscentBase.get_time()
+        self.log_device([t, name], len(self.devices))
+
+        for dev in self.devices:
+            dev.add_event(t, name)
+
+    def save_file_callback(self, paths):
+        """Called by the GUI when user browses for a file.
+        """
+        if self.filename:
+            raise TypeError('Log file already open')
+
+        if not paths:
+            return
+        fname = paths[0]
+        if not fname.endswith('.csv'):
+            fname += '.csv'
+
+        self.last_directory = dirname(fname)
+
+        self.filename = fname
+        self._log_file = open(fname, 'w')
+        self._devices_n_cols = n_cols = []
+
+        header = []
+        for dev in self.devices:
+            item = dev.get_data_header()
+            header.extend(item)
+            n_cols.append(len(item))
+
+            dev.fbind(
+                'on_data_update', self._get_dev_data, index=len(n_cols) - 1)
+
+        header.extend(['Event time', 'event'])
+        n_cols.append(2)
+        self.write_line(header)
+        self._devices_data = [None, ] * len(n_cols)
+
+    def _get_dev_data(self, dev, *args, index=0):
+        self.log_device(dev.device.get_data_row(), index)
+
+    def log_device(self, data, index):
+        if self._devices_data[index] is None:
+            self._devices_data[index] = data
+            return
+
+        line = []
+        for count, item in zip(self._devices_n_cols, self._devices_data):
+            if item is not None:
+                line.extend(item)
+            else:
+                line.extend(['', ] * count)
+        self.write_line(line)
+
+        for i in range(len(self._devices_data)):
+            self._devices_data[i] = None
+
+        self._devices_data[index] = data
+
+    def write_line(self, values):
+        self._log_file.write(
+            ','.join(
+                [f'"{val}"' if isinstance(val, str) and val else str(val)
+                 for val in values]
+            ))
+        self._log_file.write('\n')
+        self._log_file.flush()
+
+    def close_file(self):
+        if not self.filename:
+            return
+
+        if any(data is not None for data in self._devices_data):
+            line = []
+            for count, item in zip(self._devices_n_cols, self._devices_data):
+                if item is not None:
+                    line.extend(item)
+                else:
+                    line.extend(['', ] * count)
+            self.write_line(line)
+
+        self._log_file.close()
+        self._log_file = None
+        self.filename = ''
+
+        for i, dev in enumerate(self.devices):
+            dev.funbind('on_data_update', self._get_dev_data, index=i)
 
 
 def run_app():
