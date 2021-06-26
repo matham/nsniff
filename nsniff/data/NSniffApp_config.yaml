@@ -3,12 +3,14 @@ devices:
   com_port: ''
   global_range: false
   log_z: false
+  n_channels: 32
   range_chan: all
   virtual: true
 - auto_range: true
   com_port: ''
   global_range: false
   log_z: false
+  n_channels: 32
   range_chan: mouse
   virtual: true
 inspect: false

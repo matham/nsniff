@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Optional
 from matplotlib import cm
 from kivy_trio.to_trio import kivy_run_in_async, mark, KivyEventCancelled
 from pymoa_remote.threading import ThreadExecutor
@@ -130,15 +130,16 @@ class DeviceDisplay(BoxLayout):
 
     _config_props_ = (
         'com_port', 'virtual', 'log_z', 'auto_range', 'global_range',
-        'range_chan')
+        'range_chan', 'n_channels')
 
     com_port: str = StringProperty('')
 
-    device: StratuscentBase = ObjectProperty(None, allownone=True, rebind=True)
+    device: Optional[StratuscentBase] = ObjectProperty(
+        None, allownone=True, rebind=True)
 
     virtual = BooleanProperty(False)
 
-    notes = StringProperty('')
+    n_channels = 32
 
     t0 = NumericProperty(0)
 
@@ -160,7 +161,7 @@ class DeviceDisplay(BoxLayout):
 
     plots_2d: List[LinePlot] = []
 
-    _data: np.ndarray = None
+    _data: Optional[np.ndarray] = None
 
     num_points: int = NumericProperty(0)
 
@@ -172,13 +173,13 @@ class DeviceDisplay(BoxLayout):
 
     global_range = BooleanProperty(False)
 
-    min_val: np.ndarray = None
+    min_val: Optional[np.ndarray] = None
 
-    max_val: np.ndarray = None
+    max_val: Optional[np.ndarray] = None
 
     range_chan: str = StringProperty('mouse')
 
-    active_channels = ListProperty([True, ] * 32)
+    active_channels = ListProperty([True, ] * n_channels)
 
     channels_stats = []
 
@@ -240,7 +241,7 @@ class DeviceDisplay(BoxLayout):
 
         self.graph_2d = graph_2d
         self.plots_2d = plots = []
-        for i in range(32):
+        for i in range(self.n_channels):
             plot = LinePlot(color=self._plot_colors[i], line_width=dp(2))
             graph_2d.add_plot(plot)
             plots.append(plot)
@@ -274,8 +275,8 @@ class DeviceDisplay(BoxLayout):
 
         data = self._data
         self.t = device.timestamp
-        data[:32, self.num_points] = device.sensors_data
-        data[32, self.num_points] = device.timestamp
+        data[:self.n_channels, self.num_points] = device.sensors_data
+        data[self.n_channels, self.num_points] = device.timestamp
         self.num_points += 1
 
         s = data.shape[1]
@@ -293,7 +294,7 @@ class DeviceDisplay(BoxLayout):
             return 0
         n = self.num_points
         t0 = self.t0
-        total_t = self._data[32, n - 1] - t0
+        total_t = self._data[self.n_channels, n - 1] - t0
         if not total_t:
             return 0
 
@@ -309,7 +310,7 @@ class DeviceDisplay(BoxLayout):
         t = (self.graph_3d.xmax - self.graph_3d.xmin) * x_frac + \
             self.graph_3d.xmin
         if plot_3d:
-            channel = min(int(y_frac * 32), 31)
+            channel = min(int(y_frac * self.n_channels), self.n_channels - 1)
             value = data[channel, i]
             return f'{t:0.1f}, {channel + 1}, {value:0.1f}'
 
@@ -352,12 +353,15 @@ class DeviceDisplay(BoxLayout):
         data = self.get_visible_data()
         if data is None:
             return
+        n_channels = self.n_channels
         inactive_channels = np.logical_not(
             np.asarray(self.active_channels, dtype=np.bool))
 
         if self.auto_range or self.min_val is None or self.max_val is None:
-            min_val = self.min_val = np.min(data[:32, :], axis=1, keepdims=True)
-            max_val = self.max_val = np.max(data[:32, :], axis=1, keepdims=True)
+            min_val = self.min_val = np.min(
+                data[:n_channels, :], axis=1, keepdims=True)
+            max_val = self.max_val = np.max(
+                data[:n_channels, :], axis=1, keepdims=True)
             for widget, mn, mx in zip(
                     self.channels_stats, min_val[:, 0], max_val[:, 0]):
                 widget.min_val = mn.item()
@@ -372,14 +376,14 @@ class DeviceDisplay(BoxLayout):
             max_val[:, 0] = np.max(max_val)
         zero_range = min_val[:, 0] == max_val[:, 0]
 
-        scaled_data = np.clip(data[:32, :], min_val, max_val) - min_val
+        scaled_data = np.clip(data[:n_channels, :], min_val, max_val) - min_val
         max_val = max_val - min_val
 
         scaled_data[inactive_channels, :] = 0
         scaled_data[zero_range, :] = 0
         not_zero = np.logical_not(np.logical_or(zero_range, inactive_channels))
 
-        times = data[32, :].tolist()
+        times = data[n_channels, :].tolist()
         log_z = self.log_z
         for i, plot in enumerate(self.plots_2d):
             if not_zero[i]:
@@ -423,8 +427,10 @@ class DeviceDisplay(BoxLayout):
         e += 1
 
         if chan == 'all' or chan == 'mouse' and not plot_3d:
-            self.min_val = np.min(data[:32, s:e], axis=1, keepdims=True)
-            self.max_val = np.max(data[:32, s:e], axis=1, keepdims=True)
+            self.min_val = np.min(
+                data[:self.n_channels, s:e], axis=1, keepdims=True)
+            self.max_val = np.max(
+                data[:self.n_channels, s:e], axis=1, keepdims=True)
             for widget, mn, mx in zip(
                     self.channels_stats, self.min_val[:, 0],
                     self.max_val[:, 0]):
@@ -433,7 +439,7 @@ class DeviceDisplay(BoxLayout):
         else:
             if chan == 'mouse':
                 _, y = open_pos or close_pos
-                i = min(int(y * 32), 31)
+                i = min(int(y * self.n_channels), self.n_channels - 1)
             else:
                 i = int(chan) - 1
             self.min_val[i, 0] = np.min(data[i, s:e])
@@ -487,7 +493,7 @@ class DeviceDisplay(BoxLayout):
     def add_channel_selection(self, container):
         ChannelControl = Factory.ChannelControl
         channels = self.channels_stats = []
-        for i in range(32):
+        for i in range(self.n_channels):
             widget = ChannelControl()
             widget.dev = self
             widget.channel = i

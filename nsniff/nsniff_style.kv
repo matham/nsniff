@@ -261,7 +261,7 @@
             bold: True
         ThemedSpinner:
             id: range_chan
-            values: ['all', 'mouse'] + [str(i + 1) for i in range(32)]
+            values: ['all', 'mouse'] + [str(i + 1) for i in range(root.n_channels)]
             text: root.range_chan
             on_text: root.range_chan = self.text
             size_hint_min_y: self.minimum_height
