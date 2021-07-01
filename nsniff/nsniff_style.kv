@@ -85,7 +85,50 @@
         ThemedLabel:
             size_hint_x: None
             width: self.texture_size[0]
-            text: app.elapsed_time
+            text: app.remaining_time
+        FlatImageButton:
+            event_times: event_times.__self__
+            scale_down_color: True
+            source: 'flat_dots_vertical.png'
+            flat_color: app.theme.accent
+            on_release: self.event_times.open(self)
+            FlatDropDown:
+                flat_color: app.theme.primary_text
+                flat_border_color: app.theme.divider
+                do_scroll: False, True
+                id: event_times
+                on_kv_post: self.parent.remove_widget(self)
+                GridLayout:
+                    spacing: '10dp'
+                    size_hint: None, None
+                    size: self.minimum_size
+                    padding: '10dp'
+                    cols: 2
+                    ThemedLabel:
+                        text: 'default'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '70dp'
+                        on_focus: if not self.focus: app.event_times_countdown_default = float(self.text or 0) or 180
+                        text: str(app.event_times_countdown_default)
+                        hint_text: 'duration'
+                        input_filter: 'float'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '70dp'
+                        on_focus: if not self.focus: app.event_times_countdown[0] = (self.text, app.event_times_countdown[0][1])
+                        text: app.event_times_countdown[0][0]
+                        hint_text: 'events'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '70dp'
+                        on_focus: if not self.focus: app.event_times_countdown[0] = (app.event_times_countdown[0][0], float(self.text or 0) or 60)
+                        text: str(app.event_times_countdown[0][1])
+                        hint_text: 'duration'
+                        input_filter: 'float'
     ScrollView:
         bar_width: '15dp'
         scroll_type: ['bars']
@@ -214,7 +257,7 @@
             size_hint_x: None
             width: self.texture_size[0]
             padding_x: '10dp'
-            on_release: channel_selection.open(self)
+            on_release: self.channel_selection.open(self)
             ChannelSelection:
                 id: channel_selection
                 on_kv_post:

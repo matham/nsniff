@@ -1,14 +1,18 @@
-from os.path import join, dirname, exists
+from os.path import join, dirname, exists, 
+import time
 import trio
 from base_kivy_app.app import BaseKivyApp, run_app_async as run_app_async_base
 from base_kivy_app.graphics import HighightButtonBehavior
-from typing import List, IO, Dict, Set
+from typing import List, IO, Dict, Set, Tuple
 from tree_config import apply_config
 from string import ascii_letters, digits
+from threading import Thread
+from ffpyplayer.player import MediaPlayer
 
 from kivy.lang import Builder
 from kivy.factory import Factory
-from kivy.properties import ObjectProperty, StringProperty, BooleanProperty
+from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
+    ListProperty, NumericProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.behaviors.focus import FocusBehavior
 from kivy.clock import Clock
@@ -69,7 +73,8 @@ class NSniffApp(BaseKivyApp):
     """
 
     _config_props_ = (
-        'last_directory',
+        'last_directory', 'event_times_countdown',
+        'event_times_countdown_default'
     )
 
     _config_children_ = {'devices': 'devices'}
@@ -103,12 +108,25 @@ class NSniffApp(BaseKivyApp):
 
     _timer_ts = 0
 
-    elapsed_time = StringProperty('00:00.0')
+    _last_countdown = 0
+
+    remaining_time = StringProperty('00:00.0')
+
+    event_times_countdown_default = NumericProperty(180)
+
+    event_times_countdown: List[Tuple[str, float]] = ListProperty(
+        [('', 300)])
+
+    _event_times_countdown_dict: Dict[str, float] = {}
+
+    _sound_thread = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.devices = []
+        self._event_times_countdown_dict = {}
         self.fbind('filename', self.set_tittle)
+        self.fbind('event_times_countdown', self._parse_event_times)
 
     def load_app_kv(self):
         """Loads the app's kv files, if not yet loaded.
@@ -136,6 +154,7 @@ class NSniffApp(BaseKivyApp):
         self.load_app_settings_from_file()
         self.apply_app_settings()
         Clock.schedule_interval(self._update_clock, .25)
+        self._parse_event_times()
 
     def apply_config_child(self, name, prop, obj, config):
         if prop == 'devices':
@@ -211,6 +230,8 @@ class NSniffApp(BaseKivyApp):
             dev.add_event(t, name)
 
         self._timer_ts = t
+        self._last_countdown = self._event_times_countdown_dict.get(
+            name, self.event_times_countdown_default)
         self._update_clock()
 
     def save_file_callback(self, paths):
@@ -301,14 +322,34 @@ class NSniffApp(BaseKivyApp):
     def _update_clock(self, *args):
         ts = self._timer_ts
         if not ts:
-            self.elapsed_time = '00:00.0'
+            self.remaining_time = '00:00.0'
             return
 
+        was_zero = self.remaining_time == '00:00.0'
         elapsed = StratuscentBase.get_time() - ts
-        ms = round(elapsed * 10) % 10
-        sec = int(elapsed) % 60
-        minute = int(elapsed / 60)
-        self.elapsed_time = f'{minute:0>2}:{sec:0>2}.{ms}'
+        remaining = max(self._last_countdown - elapsed, 0)
+        ms = round(remaining * 10) % 10
+        sec = int(remaining) % 60
+        minute = int(remaining / 60)
+        self.remaining_time = f'{minute:0>2}:{sec:0>2}.{ms}'
+
+        if not remaining and was_zero:
+            thread = self._sound_thread = Thread(target=self._make_sound)
+            thread.start()
+
+    def _make_sound(self):
+        player = MediaPlayer('video=Logitech HD Webcam C525:audio=Microphone (HD Webcam C525)',
+                     ff_opts=ff_opts, lib_opts=lib_opts)
+
+    def _parse_event_times(self, *args):
+        items = self._event_times_countdown_dict = {}
+        for key, value in self.event_times_countdown:
+            for char in key.split(','):
+                char = char.strip()
+                if not char:
+                    continue
+
+                items[char] = value
 
 
 def run_app():
