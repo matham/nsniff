@@ -13,5 +13,9 @@ devices:
   n_channels: 32
   range_chan: mouse
   virtual: true
+event_times_countdown:
+- - a,b
+  - 5.0
+event_times_countdown_default: 10.0
 inspect: false
 last_directory: '~'

@@ -1,4 +1,4 @@
-from os.path import join, dirname, exists, 
+from os.path import join, dirname, exists
 import time
 import trio
 from base_kivy_app.app import BaseKivyApp, run_app_async as run_app_async_base
@@ -7,7 +7,6 @@ from typing import List, IO, Dict, Set, Tuple
 from tree_config import apply_config
 from string import ascii_letters, digits
 from threading import Thread
-from ffpyplayer.player import MediaPlayer
 
 from kivy.lang import Builder
 from kivy.factory import Factory
@@ -16,6 +15,7 @@ from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.behaviors.focus import FocusBehavior
 from kivy.clock import Clock
+from kivy.core.audio import SoundLoader
 
 from kivy_trio.context import kivy_trio_context_manager
 
@@ -333,13 +333,17 @@ class NSniffApp(BaseKivyApp):
         minute = int(remaining / 60)
         self.remaining_time = f'{minute:0>2}:{sec:0>2}.{ms}'
 
-        if not remaining and was_zero:
+        if not was_zero and self.remaining_time == '00:00.0':
             thread = self._sound_thread = Thread(target=self._make_sound)
             thread.start()
 
     def _make_sound(self):
-        player = MediaPlayer('video=Logitech HD Webcam C525:audio=Microphone (HD Webcam C525)',
-                     ff_opts=ff_opts, lib_opts=lib_opts)
+        sound = SoundLoader.load(
+            join(dirname(__file__), 'data', 'Electronic_Chime.wav'))
+        sound.loop = True
+        sound.play()
+        time.sleep(4)
+        sound.stop()
 
     def _parse_event_times(self, *args):
         items = self._event_times_countdown_dict = {}
