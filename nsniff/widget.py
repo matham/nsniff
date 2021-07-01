@@ -1,5 +1,5 @@
 import numpy as np
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from matplotlib import cm
 from kivy_trio.to_trio import kivy_run_in_async, mark, KivyEventCancelled
 from pymoa_remote.threading import ThreadExecutor
@@ -189,10 +189,18 @@ class DeviceDisplay(BoxLayout):
 
     _plot_colors = []
 
+    _event_plots: Tuple[List[LinePlot], List[LinePlot]] = ([], [])
+
+    _event_plots_trigger = None
+
     def __init__(self, **kwargs):
         self._plot_colors = cm.get_cmap('tab20').colors + \
                             cm.get_cmap('tab20b').colors
         super().__init__(**kwargs)
+        self._event_plots = [], []
+        self._event_plots_trigger = Clock.create_trigger(
+            self._move_events_to_top)
+
         self._draw_trigger = Clock.create_trigger(self.draw_data)
         self.fbind('log_z', self.recompute_bar)
         self.fbind('log_z', self._draw_trigger)
@@ -227,6 +235,18 @@ class DeviceDisplay(BoxLayout):
         self.graph_3d.xmin = max(min(xmin, self.t), self.t0)
         self.graph_3d.xmax = max(min(xmax, self.t), self.t0)
 
+    def _move_events_to_top(self, *args):
+        plots2, plots3 = self._event_plots
+        graph2 = self.graph_2d
+        graph3 = self.graph_3d
+
+        for plot in plots2:
+            graph2.remove_plot(plot)
+            graph2.add_plot(plot)
+        for plot in plots3:
+            graph3.remove_plot(plot)
+            graph3.add_plot(plot)
+
     def on_data_update(self, instance):
         pass
 
@@ -250,6 +270,7 @@ class DeviceDisplay(BoxLayout):
         self.active_channels[channel] = visible
         if visible:
             self.graph_2d.add_plot(self.plots_2d[channel])
+            self._event_plots_trigger()
         else:
             self.graph_2d.remove_plot(self.plots_2d[channel])
 
@@ -463,6 +484,12 @@ class DeviceDisplay(BoxLayout):
     @app_error
     @kivy_run_in_async
     def start(self):
+        for graph, plots in zip(
+                (self.graph_2d, self.graph_3d), self._event_plots):
+            for plot in plots:
+                graph.remove_plot(plot)
+        self._event_plots = [], []
+
         self._data = None
         self.num_points = 0
         self.t0 = 0
@@ -522,7 +549,12 @@ class DeviceDisplay(BoxLayout):
         return StratuscentBase.get_data_header()
 
     def add_event(self, t, name):
-        for graph in (self.graph_2d, self.graph_3d):
-            p = LinePlot(color=(0, 0, 0), line_width=dp(3))
-            p.points = [(t, .1), (t, 1)]
-            graph.add_plot(p)
+        p = LinePlot(color=(0, 0, 0), line_width=dp(3))
+        p.points = [(t, .1), (t, 1)]
+        self.graph_2d.add_plot(p)
+        self._event_plots[0].append(p)
+
+        p = LinePlot(color=(0, 0, 0), line_width=dp(3))
+        p.points = [(t, 0), (t, self.graph_3d.ymax)]
+        self.graph_3d.add_plot(p)
+        self._event_plots[1].append(p)

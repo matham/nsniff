@@ -11,6 +11,7 @@ from kivy.factory import Factory
 from kivy.properties import ObjectProperty, StringProperty, BooleanProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.behaviors.focus import FocusBehavior
+from kivy.clock import Clock
 
 from kivy_trio.context import kivy_trio_context_manager
 
@@ -100,6 +101,10 @@ class NSniffApp(BaseKivyApp):
 
     global_focus = BooleanProperty(False)
 
+    _timer_ts = 0
+
+    elapsed_time = StringProperty('00:00.0')
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.devices = []
@@ -130,6 +135,7 @@ class NSniffApp(BaseKivyApp):
 
         self.load_app_settings_from_file()
         self.apply_app_settings()
+        Clock.schedule_interval(self._update_clock, .25)
 
     def apply_config_child(self, name, prop, obj, config):
         if prop == 'devices':
@@ -190,18 +196,22 @@ class NSniffApp(BaseKivyApp):
         if self.filename:
             raise TypeError('Cannot remove device while saving data')
 
+        device.stop()
         self.root.ids.dev_container.remove_widget(device)
         self.devices.remove(device)
 
     def log_event(self, name, display=False):
+        t = StratuscentBase.get_time()
         if display:
             self.root.ids.event_name.text = name
 
-        t = StratuscentBase.get_time()
         self.log_device([t, name], len(self.devices))
 
         for dev in self.devices:
             dev.add_event(t, name)
+
+        self._timer_ts = t
+        self._update_clock()
 
     def save_file_callback(self, paths):
         """Called by the GUI when user browses for a file.
@@ -284,6 +294,21 @@ class NSniffApp(BaseKivyApp):
 
         for i, dev in enumerate(self.devices):
             dev.funbind('on_data_update', self._get_dev_data, index=i)
+
+        self._timer_ts = 0
+        self._update_clock()
+
+    def _update_clock(self, *args):
+        ts = self._timer_ts
+        if not ts:
+            self.elapsed_time = '00:00.0'
+            return
+
+        elapsed = StratuscentBase.get_time() - ts
+        ms = round(elapsed * 10) % 10
+        sec = int(elapsed) % 60
+        minute = int(elapsed / 60)
+        self.elapsed_time = f'{minute:0>2}:{sec:0>2}.{ms}'
 
 
 def run_app():

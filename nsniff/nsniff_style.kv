@@ -80,8 +80,12 @@
                 Color:
                     rgba: 1, .47, .39, (1 if app.global_focus else 0)
                 Line:
-                    width: 1
+                    width: 2
                     points: [self.x, self.y, self.right, self.y, self.right, self.top, self.x, self.top, self.x, self.y]
+        ThemedLabel:
+            size_hint_x: None
+            width: self.texture_size[0]
+            text: app.elapsed_time
     ScrollView:
         bar_width: '15dp'
         scroll_type: ['bars']
