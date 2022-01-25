@@ -87,7 +87,6 @@ class StratuscentSensor(StratuscentBase):
         ser.parity = serial.PARITY_NONE  # set parity check: no parity
         ser.stopbits = serial.STOPBITS_ONE  # number of stop bits
         # ser.timeout = None          #block read
-        ser.set_buffer_size(rx_size=256, tx_size=256)
         ser.timeout = 10  # non-block read
         # ser.timeout = 2              #timeout block read
         ser.xonxoff = False  # disable software flow control
