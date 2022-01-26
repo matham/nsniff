@@ -25,9 +25,9 @@ class StratuscentBase(Device):
 
     device_id: str = ObjectProperty('')
 
-    def __init__(self, com_port: str, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, com_port: str = '', **kwargs):
         self.com_port = com_port
+        super().__init__(**kwargs)
 
     async def __aenter__(self):
         await self.open_device()
