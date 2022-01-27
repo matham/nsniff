@@ -1,11 +1,13 @@
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Iterable, Dict
 from random import random, shuffle, randint
 from time import perf_counter, sleep
 import serial
+from smbus2 import SMBus, i2c_msg
 
 from kivy.properties import ObjectProperty
 
 from pymoa.device import Device
+from pymoa.device.digital import DigitalPort
 from pymoa_remote.client import apply_executor, apply_generator_executor
 
 
@@ -183,3 +185,205 @@ class VirtualStratuscentSensor(StratuscentBase):
                     sensors[i] = temp_val
                     # do only one shuffle
                     break
+
+
+class MODIOBase(DigitalPort):
+
+    _config_props_ = ('dev_address', )
+
+    dev_address: int = 0
+
+    relay_0: bool = False
+
+    relay_1: bool = False
+
+    relay_2: bool = False
+
+    relay_3: bool = False
+
+    opto_0: bool = False
+
+    opto_1: bool = False
+
+    opto_2: bool = False
+
+    opto_3: bool = False
+
+    analog_0: float = 0
+
+    analog_1: float = 0
+
+    analog_2: float = 0
+
+    analog_3: float = 0
+
+    channel_names: List[str] = [
+        f'relay_{i}' for i in range(4)] + [
+        f'opto_{i}' for i in range(4)] + [
+        f'analog_{i}' for i in range(4)]
+
+    _relay_map: Dict[str, int] = {f'relay_{i}': i for i in range(4)}
+
+    _analog_map: Dict[str, int] = {f'analog_{i}': i for i in range(4)}
+
+    def __init__(self, dev_address: int = 0, **kwargs):
+        self.dev_address = dev_address
+        super().__init__(**kwargs)
+
+    async def __aenter__(self):
+        await self.open_device()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close_device()
+
+    def open_device(self):
+        raise NotImplementedError
+
+    def close_device(self):
+        raise NotImplementedError
+
+    def _combine_write_args(
+            self, high: Iterable[str], low: Iterable[str],
+            kwargs: Dict[str, bool]):
+        relay_map = self._relay_map
+        value = 0
+
+        for item in high:
+            kwargs[item] = True
+        for item in low:
+            kwargs[item] = False
+
+        for name, val in kwargs.items():
+            if val:
+                value |= 1 << relay_map[name]
+
+        return value
+
+    def update_write_data(self, result):
+        value, t = result
+
+        self.timestamp = t
+        for i in range(4):
+            setattr(self, f'relay_{i}', bool((1 << i) & value))
+
+        self.dispatch('on_data_update', self)
+
+    def update_read_data(self, result):
+        opto_val, analog_vals, t = result
+
+        self.timestamp = t
+        if opto_val is not None:
+            for i in range(4):
+                setattr(self, f'opto_{i}', bool((1 << i) & opto_val))
+        for name, value in analog_vals.items():
+            setattr(self, name, value)
+
+        self.dispatch('on_data_update', self)
+
+    @staticmethod
+    def get_time():
+        return perf_counter()
+
+    def write_states(
+            self, high: Iterable[str] = (), low: Iterable[str] = (), **kwargs):
+        raise NotImplementedError
+
+    def _read_state(self, opto=True, analog_channels: Iterable[str] = ()):
+        raise NotImplementedError
+
+    @apply_executor(callback='update_read_data')
+    def read_state(self, opto=True, analog_channels: Iterable[str] = ()):
+        return self._read_state(opto, analog_channels)
+
+    @apply_generator_executor(callback='update_read_data')
+    def pump_state(self, opto=True, analog_channels: Iterable[str] = ()):
+        while True:
+            yield self._read_state(opto, analog_channels)
+
+
+class MODIOBoard(MODIOBase):
+
+    bus: Optional[SMBus] = None
+
+    @apply_executor
+    def open_device(self):
+        self.bus = SMBus(1)
+
+    @apply_executor
+    def close_device(self):
+        if self.bus is not None:
+            self.bus.close()
+            self.bus = None
+
+    @apply_executor(callback='update_write_data')
+    def write_states(
+            self, high: Iterable[str] = (), low: Iterable[str] = (),
+            **kwargs: bool):
+        value = self._combine_write_args(high, low, kwargs)
+        self.bus.write_byte_data(self.dev_address, 0x10, value)
+        return value, self.get_time()
+
+    def _read_state(self, opto=True, analog_channels: Iterable[str] = ()):
+        if not opto and not analog_channels:
+            raise ValueError('No channels specified to read')
+
+        opto_val = None
+        if opto:
+            self.bus.write_byte(self.dev_address, 0x20)
+            opto_val = self.bus.read_byte(self.dev_address)
+
+        analog_vals = {}
+        a_map = self._analog_map
+        for chan in analog_channels:
+            self.bus.write_byte(self.dev_address, 0x30 | (1 << a_map[chan]))
+            msg = i2c_msg.read(self.dev_address, 2)
+            self.bus.i2c_rdwr(msg)
+            data = list(msg)
+            assert len(data) == 2
+
+            low, high = data
+            val = 0
+            for i in range(8):
+                if (1 << (7 - i)) & low:
+                    val |= 1 << i
+            if high & 0x02:
+                val |= 1 << 8
+            if high & 0x01:
+                val |= 1 << 9
+
+            analog_vals[chan] = val * 3.3 / 1024
+
+        return opto_val, analog_vals, self.get_time()
+
+
+class VirtualMODIOBoard(MODIOBase):
+
+    @apply_executor
+    def open_device(self):
+        pass
+
+    @apply_executor
+    def close_device(self):
+        pass
+
+    @apply_executor(callback='update_write_data')
+    def write_states(
+            self, high: Iterable[str] = (), low: Iterable[str] = (),
+            **kwargs: bool):
+        value = self._combine_write_args(high, low, kwargs)
+        return value, self.get_time()
+
+    def _read_state(self, opto=True, analog_channels: Iterable[str] = ()):
+        if not opto and not analog_channels:
+            raise ValueError('No channels specified to read')
+
+        opto_val = None
+        if opto:
+            opto_val = randint(0, 0b1111)
+
+        analog_vals = {}
+        for chan in analog_channels:
+            analog_vals[chan] = random() * 3.3
+
+        return opto_val, analog_vals, self.get_time()

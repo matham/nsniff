@@ -24,7 +24,7 @@ setup(
     install_requires=[
         'base_kivy_app', 'kivy', 'pyserial',
         'kivy_garden.graph', 'trio', 'pymoa-remote', 'pymoa',
-        'tree-config', 'kivy_trio', 'matplotlib'],
+        'tree-config', 'kivy_trio', 'matplotlib', 'smbus2'],
     extras_require={
         'dev': [
             'pytest>=3.6', 'pytest-cov', 'flake8', 'sphinx-rtd-theme',
