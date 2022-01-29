@@ -1,8 +1,10 @@
 import numpy as np
+import trio
 from typing import List, Dict, Optional, Tuple
 from matplotlib import cm
 from kivy_trio.to_trio import kivy_run_in_async, mark, KivyEventCancelled
 from pymoa_remote.threading import ThreadExecutor
+from pymoa_remote.socket.websocket_client import WebSocketExecutor
 from base_kivy_app.app import app_error
 from kivy_garden.graph import Graph, ContourPlot, LinePlot
 
@@ -130,9 +132,13 @@ class DeviceDisplay(BoxLayout):
 
     _config_props_ = (
         'com_port', 'virtual', 'log_z', 'auto_range', 'global_range',
-        'range_chan', 'n_channels')
+        'range_chan', 'n_channels', 'remote_server', 'remote_port')
 
     com_port: str = StringProperty('')
+
+    remote_server: str = StringProperty('')
+
+    remote_port: int = NumericProperty(0)
 
     device: Optional[StratuscentBase] = ObjectProperty(
         None, allownone=True, rebind=True)
@@ -471,15 +477,25 @@ class DeviceDisplay(BoxLayout):
 
         self._draw_trigger()
 
+    async def _run_device(self, executor):
+        async with executor.remote_instance(self.device, self.com_port):
+            async with self.device as device:
+                async with device.read_sensor_values() as aiter:
+                    async for _ in aiter:
+                        if self.done:
+                            break
+                        self.process_data(device)
+
     async def run_device(self):
-        async with ThreadExecutor() as executor:
-            async with executor.remote_instance(self.device, 'sensor'):
-                async with self.device as device:
-                    async with device.read_sensor_values() as aiter:
-                        async for _ in aiter:
-                            if self.done:
-                                break
-                            self.process_data(device)
+        if self.remote_server:
+            async with trio.open_nursery() as nursery:
+                async with WebSocketExecutor(
+                        nursery=nursery, server=self.remote_server,
+                        port=self.remote_port) as executor:
+                    await self._run_device(executor)
+        else:
+            async with ThreadExecutor() as executor:
+                await self._run_device(executor)
 
     @app_error
     @kivy_run_in_async
