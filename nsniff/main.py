@@ -74,7 +74,7 @@ class NSniffApp(BaseKivyApp):
 
     _config_props_ = (
         'last_directory', 'event_times_countdown',
-        'event_times_countdown_default'
+        'event_times_countdown_default', 'pixel_height',
     )
 
     _config_children_ = {'devices': 'devices'}
@@ -120,6 +120,14 @@ class NSniffApp(BaseKivyApp):
     _event_times_countdown_dict: Dict[str, float] = {}
 
     _sound_thread = None
+
+    pixel_height: int = NumericProperty(4)
+
+    _dev_container = None
+
+    _valve_container = None
+
+    _mfc_container = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -208,7 +216,7 @@ class NSniffApp(BaseKivyApp):
             raise TypeError('Cannot add device while saving data')
 
         dev = DeviceDisplay()
-        self.root.ids.dev_container.add_widget(dev)
+        self._dev_container.add_widget(dev)
         self.devices.append(dev)
 
     def remove_device(self, device: DeviceDisplay) -> None:
@@ -216,7 +224,7 @@ class NSniffApp(BaseKivyApp):
             raise TypeError('Cannot remove device while saving data')
 
         device.stop()
-        self.root.ids.dev_container.remove_widget(device)
+        self._dev_container.remove_widget(device)
         self.devices.remove(device)
 
     def log_event(self, name, display=False):

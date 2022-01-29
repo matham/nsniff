@@ -60,6 +60,35 @@
             flat_color: app.theme.accent
             on_kv_post: app.error_indicator = self
             on_release: self.count = 0
+        FlatImageButton:
+            app_settings: app_settings.__self__
+            scale_down_color: True
+            source: 'flat_dots_vertical.png'
+            flat_color: app.theme.accent
+            on_release: self.app_settings.open(self)
+            FlatDropDown:
+                flat_color: app.theme.primary_text
+                flat_border_color: app.theme.divider
+                do_scroll: False, True
+                id: app_settings
+                on_kv_post: self.parent.remove_widget(self)
+                GridLayout:
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: '10dp', '5dp'
+                    size_hint_min_x: self.minimum_width
+                    cols: 2
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
+                        text: 'Channel height:'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '50dp'
+                        text: str(app.pixel_height)
+                        on_focus: if not self.focus: app.pixel_height = int(self.text or 0)
+                        input_filter: 'int'
         FlatDivider:
             color: app.theme.divider
         FlatSizedTextInput:
@@ -135,23 +164,41 @@
         do_scroll_x: False
         always_overscroll: False
         BoxLayout:
-            id: dev_container
             orientation: 'vertical'
             spacing: '10dp'
             size_hint_y: None
-            height: len(self.children) * self.parent.height
+            height: self.minimum_height
             canvas:
                 Color:
                     rgba: app.theme.primary
                 Rectangle:
                     pos: self.pos
                     size: self.size
+            BoxLayout:
+                spacing: '10dp'
+                size_hint_y: None
+                height: '34dp'
+                BoxLayout:
+                    on_kv_post: app._valve_container = self.__self__
+                    spacing: '10dp'
+                Widget
+                BoxLayout:
+                    on_kv_post: app._mfc_container = self.__self__
+                    spacing: '10dp'
+            BoxLayout:
+                on_kv_post: app._dev_container = self.__self__
+                orientation: 'vertical'
+                spacing: '10dp'
+                size_hint_y: None
+                height: self.minimum_height
 
 
 <DeviceDisplay>:
     orientation: 'vertical'
     spacing: '5dp'
     padding: '20dp', '5dp'
+    size_hint_y: None
+    height: self.minimum_height
     canvas:
         Color:
             rgba: app.theme.primary_text
@@ -163,54 +210,13 @@
         height: '34dp'
         spacing: '5dp'
         size_hint_min_x: self.minimum_width
-        AccentThemedToggleButton:
-            text: 'Virtual device'
-            state: 'down' if root.virtual else 'normal'
-            size_hint_x: None
-            width: self.texture_size[0]
-            padding_x: '10dp'
-            on_state: root.virtual = self.state == 'down'
-        FlatSizedTextInput:
-            background_color: app.theme.primary_text
-            size_hint_x: None
-            width: '100dp'
-            text: root.com_port
-            on_text: root.com_port = self.text
-            hint_text: 'port'
         FlatImageToggleButton:
+            id: play
+            playing_data: self.state == 'down'
             source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
             flat_color: app.theme.accent
             on_release: root.start() if self.state == 'down' else root.stop()
             hover_text: '[b]start[/b] sensor' if self.state == 'normal' else '[b]stop[/b] sensor'
-        Widget
-        ThemedLabel:
-            size_hint_x: None
-            width: self.texture_size[0]
-            text: 'ID: {}'.format(root.device.device_id) if root.device is not None else 'ID: none'
-        ThemedLabel:
-            size_hint_x: None
-            width: self.texture_size[0]
-            text: 'Temp: {:0.1f}'.format(root.device.temp) if root.device is not None else 'Temp: 0'
-        ThemedLabel:
-            size_hint_x: None
-            width: self.texture_size[0]
-            text: 'Humidity: {:0.1f}'.format(root.device.humidity) if root.device is not None else 'Tumidity: 0'
-        ThemedLabel:
-            size_hint_x: None
-            width: self.texture_size[0]
-            text: 'Clock: {:0.1f}'.format(root.t)
-        FlatImageButton:
-            disabled: bool(app.filename)
-            scale_down_color: True
-            source: 'flat_delete.png'
-            flat_color: app.theme.accent
-            hover_text: 'Delete device'
-            on_release: app.remove_device(root.__self__)
-    BoxLayout:
-        size_hint_y: None
-        height: '34dp'
-        spacing: '5dp'
-        size_hint_min_x: self.minimum_width
         AccentThemedToggleButton:
             text: 'logarithmic'
             state: 'down' if root.log_z else 'normal'
@@ -251,69 +257,179 @@
             padding_x: '10dp'
             on_state: plot_3d_button.state = 'normal' if self.state == 'down' else 'down'
         Widget
-        AccentThemedButton:
-            channel_selection: channel_selection.__self__
-            text: 'Channels'
-            size_hint_x: None
-            width: self.texture_size[0]
-            padding_x: '10dp'
-            on_release: self.channel_selection.open(self)
-            ChannelSelection:
-                id: channel_selection
-                on_kv_post:
-                    root.add_channel_selection(self)
-                    self.parent.remove_widget(self)
+        FlatImageButton:
+            dev_settings: dev_settings.__self__
+            scale_down_color: True
+            source: 'flat_dots_vertical.png'
+            flat_color: app.theme.accent
+            on_release: self.dev_settings.open(self)
+            FlatDropDown:
+                flat_color: app.theme.primary_text
+                flat_border_color: app.theme.divider
+                do_scroll: False, True
+                id: dev_settings
+                on_kv_post: self.parent.remove_widget(self)
                 BoxLayout:
-                    spacing: '10dp'
+                    spacing: '5dp'
                     size_hint: None, None
                     size: self.minimum_size
-                    padding: '10dp'
-                    AccentThemedButton:
+                    orientation: 'vertical'
+                    BoxLayout:
                         size_hint: None, None
-                        size: self.texture_size
-                        padding: '10dp', '10dp'
-                        on_state: for widget in root.channels_stats: widget.ids.state.state = 'down'
-                        text: 'Show all'
-                    AccentThemedButton:
-                        size_hint: None, None
-                        size: self.texture_size
-                        padding: '10dp', '10dp'
-                        on_state: for widget in root.channels_stats: widget.ids.state.state = 'normal'
-                        text: 'Hide all'
-        FlatSizedTextInput:
-            background_color: app.theme.primary_text
-            size_hint_x: None
-            width: '80dp'
-            on_focus: if not self.focus: root.t_start = float(self.text) if self.text else None
-            hint_text: 'start time'
-            input_filter: 'float'
-        FlatSizedTextInput:
-            background_color: app.theme.primary_text
-            size_hint_x: None
-            width: '80dp'
-            on_focus: if not self.focus: root.t_last = float(self.text) if self.text else None
-            hint_text: 'n end sec'
-            input_filter: 'float'
-        FlatSizedTextInput:
-            background_color: app.theme.primary_text
-            size_hint_x: None
-            width: '80dp'
-            on_focus: if not self.focus: root.t_end = float(self.text) if self.text else None
-            hint_text: 'end time'
-            input_filter: 'float'
-        ThemedLabel:
-            size_hint_x: None
-            width: self.texture_size[0]
-            text: 'Range channel:'
-            bold: True
-        ThemedSpinner:
-            id: range_chan
-            values: ['all', 'mouse'] + [str(i + 1) for i in range(root.n_channels)]
-            text: root.range_chan
-            on_text: root.range_chan = self.text
-            size_hint_min_y: self.minimum_height
-            size_hint_x: None
-            width: '100dp'
+                        size: self.minimum_width, '24dp'
+                        spacing: '5dp'
+                        ThemedLabel:
+                            size_hint_x: None
+                            width: self.texture_size[0]
+                            text: 'ID: {}'.format(root.device.device_id) if root.device is not None else 'ID: none'
+                        ThemedLabel:
+                            size_hint_x: None
+                            width: self.texture_size[0]
+                            text: 'Temp: {:0.1f}'.format(root.device.temp) if root.device is not None else 'Temp: 0'
+                        ThemedLabel:
+                            size_hint_x: None
+                            width: self.texture_size[0]
+                            text: 'Humidity: {:0.1f}'.format(root.device.humidity) if root.device is not None else 'Humidity: 0'
+                        ThemedLabel:
+                            size_hint_x: None
+                            width: self.texture_size[0]
+                            text: 'Clock: {:0.1f}'.format(root.t)
+                    GridLayout:
+                        size_hint_y: None
+                        height: self.minimum_height
+                        spacing: '10dp', '5dp'
+                        size_hint_min_x: self.minimum_width
+                        cols: 2
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'Device:'
+                        BoxLayout:
+                            disabled: bool(play.playing_data)
+                            size_hint_y: None
+                            height: '24dp'
+                            spacing: '5dp'
+                            size_hint_min_x: self.minimum_width
+                            AccentThemedToggleButton:
+                                text: 'Virtual device'
+                                state: 'down' if root.virtual else 'normal'
+                                size_hint_x: None
+                                width: self.texture_size[0]
+                                padding_x: '10dp'
+                                on_state: root.virtual = self.state == 'down'
+                                hover_text: 'Device is virtual/real'
+                            Widget
+                            FlatImageButton:
+                                disabled: bool(app.filename) or bool(play.playing_data)
+                                scale_down_color: True
+                                source: 'flat_delete.png'
+                                flat_color: app.theme.accent
+                                hover_text: 'Delete device'
+                                on_release: app.remove_device(root.__self__)
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'COM port:'
+                        FlatSizedTextInput:
+                            disabled: bool(play.playing_data)
+                            background_color: app.theme.primary_text
+                            size_hint_min_x: '100dp'
+                            text: root.com_port
+                            on_text: root.com_port = self.text
+                            hint_text: 'port'
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'Remote server:'
+                        FlatSizedTextInput:
+                            disabled: bool(play.playing_data)
+                            background_color: app.theme.primary_text
+                            size_hint_min_x: '100dp'
+                            text: root.remote_server
+                            on_text: root.remote_server = self.text
+                            hint_text: 'host name'
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'Remote port:'
+                        FlatSizedTextInput:
+                            disabled: bool(play.playing_data)
+                            background_color: app.theme.primary_text
+                            size_hint_min_x: '100dp'
+                            text: str(root.remote_port)
+                            on_text: root.remote_port = int(self.text or 0)
+                            hint_text: 'port number'
+                            input_filter: 'int'
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'Select Channels:'
+                        AccentThemedButton:
+                            channel_selection: channel_selection.__self__
+                            text: 'Channels'
+                            size_hint_x: None
+                            width: self.texture_size[0]
+                            on_release: self.channel_selection.open(self)
+                            hover_text: 'Select displayed channels'
+                            ChannelSelection:
+                                id: channel_selection
+                                on_kv_post:
+                                    root.add_channel_selection(self)
+                                    self.parent.remove_widget(self)
+                                BoxLayout:
+                                    spacing: '10dp'
+                                    size_hint: None, None
+                                    size: self.minimum_size
+                                    padding: '10dp'
+                                    AccentThemedButton:
+                                        size_hint: None, None
+                                        size: self.texture_size
+                                        padding: '10dp', '10dp'
+                                        on_state: for widget in root.channels_stats: widget.ids.state.state = 'down'
+                                        text: 'Show all'
+                                    AccentThemedButton:
+                                        size_hint: None, None
+                                        size: self.texture_size
+                                        padding: '10dp', '10dp'
+                                        on_state: for widget in root.channels_stats: widget.ids.state.state = 'normal'
+                                        text: 'Hide all'
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'Displayed range:'
+                        BoxLayout:
+                            size_hint_min_x: self.minimum_width
+                            spacing: '5dp'
+                            FlatSizedTextInput:
+                                background_color: app.theme.primary_text
+                                size_hint_min_x: '80dp'
+                                on_focus: if not self.focus: root.t_start = float(self.text) if self.text else None
+                                hint_text: 'start time'
+                                input_filter: 'float'
+                            FlatSizedTextInput:
+                                background_color: app.theme.primary_text
+                                size_hint_min_x: '80dp'
+                                on_focus: if not self.focus: root.t_last = float(self.text) if self.text else None
+                                hint_text: 'n end sec'
+                                input_filter: 'float'
+                            FlatSizedTextInput:
+                                background_color: app.theme.primary_text
+                                size_hint_min_x: '80dp'
+                                on_focus: if not self.focus: root.t_end = float(self.text) if self.text else None
+                                hint_text: 'end time'
+                                input_filter: 'float'
+                        ThemedLabel:
+                            size_hint_x: None
+                            width: self.texture_size[0]
+                            text: 'Range channel:'
+                        ThemedSpinner:
+                            id: range_chan
+                            values: ['all', 'mouse'] + [str(i + 1) for i in range(root.n_channels)]
+                            text: root.range_chan
+                            on_text: root.range_chan = self.text
+                            size_hint_min_y: self.minimum_height
+                            size_hint_x: None
+                            width: '100dp'
     Widget:
         size_hint_y: None
         height: '20dp'
@@ -326,7 +442,9 @@
                 texture: root.scale_tex
     ScreenManager:
         id: manager
-        size_hint_min: '114dp', '114dp'
+        size_hint_min_x: '114dp'
+        size_hint_y: None
+        height: dp(114) + 32 * app.pixel_height
         on_kv_post: root.create_plot(plot_3d.__self__, plot_2d.__self__)
         transition: NoTransition()
         Screen:
