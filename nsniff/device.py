@@ -2,7 +2,10 @@ from typing import Optional, List, Union, Iterable, Dict
 from random import random, shuffle, randint
 from time import perf_counter, sleep
 import serial
-from smbus2 import SMBus, i2c_msg
+try:
+    from smbus2 import SMBus, i2c_msg
+except (ImportError, ModuleNotFoundError):
+    pass
 
 from kivy.properties import ObjectProperty
 
@@ -304,7 +307,7 @@ class MODIOBase(DigitalPort):
 
 class MODIOBoard(MODIOBase):
 
-    bus: Optional[SMBus] = None
+    bus = None
 
     @apply_executor
     def open_device(self):
@@ -371,12 +374,15 @@ class VirtualMODIOBoard(MODIOBase):
     def write_states(
             self, high: Iterable[str] = (), low: Iterable[str] = (),
             **kwargs: bool):
+        sleep(.05)
         value = self._combine_write_args(high, low, kwargs)
         return value, self.get_time()
 
     def _read_state(self, opto=True, analog_channels: Iterable[str] = ()):
         if not opto and not analog_channels:
             raise ValueError('No channels specified to read')
+
+        sleep(.05)
 
         opto_val = None
         if opto:
