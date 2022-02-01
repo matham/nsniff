@@ -22,15 +22,6 @@
             Rectangle:
                 pos: self.pos
                 size: self.size
-        AccentThemedButton:
-            disabled: bool(app.filename)
-            text: 'Add device'
-            size_hint_x: None
-            width: self.texture_size[0]
-            padding_x: '10dp'
-            on_release: app.add_device()
-        FlatDivider:
-            color: app.theme.divider
         FlatImageButton:
             disabled: bool(app.filename)
             scale_down_color: True
@@ -81,6 +72,17 @@
                     ThemedLabel:
                         size_hint: None, None
                         size: self.texture_size[0], '24dp'
+                        text: 'Num sensors:'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '50dp'
+                        text: str(app.n_sensors)
+                        on_focus: if not self.focus: app.n_sensors = int(self.text or 0)
+                        input_filter: 'int'
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
                         text: 'Channel height:'
                     FlatSizedTextInput:
                         background_color: app.theme.primary_text
@@ -88,6 +90,28 @@
                         width: '50dp'
                         text: str(app.pixel_height)
                         on_focus: if not self.focus: app.pixel_height = int(self.text or 0)
+                        input_filter: 'int'
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
+                        text: 'Num valve boards:'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '50dp'
+                        text: str(app.n_valve_boards)
+                        on_focus: if not self.focus: app.n_valve_boards = int(self.text or 0)
+                        input_filter: 'int'
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
+                        text: 'Num MFCs:'
+                    FlatSizedTextInput:
+                        background_color: app.theme.primary_text
+                        size_hint_x: None
+                        width: '50dp'
+                        text: str(app.n_mfc)
+                        on_focus: if not self.focus: app.n_mfc = int(self.text or 0)
                         input_filter: 'int'
         FlatDivider:
             color: app.theme.divider
@@ -181,7 +205,10 @@
                 BoxLayout:
                     on_kv_post: app._valve_container = self.__self__
                     spacing: '10dp'
-                Widget
+                FlatDivider:
+                    size_hint_y: None
+                    height: '24dp'
+                    color: app.theme.divider
                 BoxLayout:
                     on_kv_post: app._mfc_container = self.__self__
                     spacing: '10dp'
@@ -304,28 +331,13 @@
                             size_hint: None, None
                             size: self.texture_size[0], '24dp'
                             text: 'Device:'
-                        BoxLayout:
-                            disabled: bool(play.playing_data)
-                            size_hint_y: None
-                            height: '24dp'
-                            spacing: '5dp'
-                            size_hint_min_x: self.minimum_width
-                            AccentThemedToggleButton:
-                                text: 'Virtual device'
-                                state: 'down' if root.virtual else 'normal'
-                                size_hint_x: None
-                                width: self.texture_size[0]
-                                padding_x: '10dp'
-                                on_state: root.virtual = self.state == 'down'
-                                hover_text: 'Device is virtual/real'
-                            Widget
-                            FlatImageButton:
-                                disabled: bool(app.filename) or bool(play.playing_data)
-                                scale_down_color: True
-                                source: 'flat_delete.png'
-                                flat_color: app.theme.accent
-                                hover_text: 'Delete device'
-                                on_release: app.remove_device(root.__self__)
+                        AccentThemedToggleButton:
+                            text: 'Virtual device'
+                            state: 'down' if root.virtual else 'normal'
+                            size_hint_min_x: self.texture_size[0]
+                            padding_x: '10dp'
+                            on_state: root.virtual = self.state == 'down'
+                            hover_text: 'Device is virtual/real'
                         ThemedLabel:
                             size_hint: None, None
                             size: self.texture_size[0], '24dp'
@@ -559,3 +571,192 @@
         Rectangle:
             size: self.size
             pos: self.pos
+
+
+<ValveBoardWidget>:
+    spacing: '7dp'
+    size_hint: None, None
+    size: self.minimum_width, '25dp'
+    on_data_update:
+        relay_0.state = 'down' if self.device.relay_0 else 'normal'
+        relay_1.state = 'down' if self.device.relay_1 else 'normal'
+        relay_2.state = 'down' if self.device.relay_2 else 'normal'
+        relay_3.state = 'down' if self.device.relay_3 else 'normal'
+    FlatImageToggleButton:
+        id: play
+        playing_data: self.state == 'down'
+        source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
+        flat_color: app.theme.accent
+        on_release: root.start() if self.state == 'down' else root.stop()
+        hover_text: '[b]start[/b] valves' if self.state == 'normal' else '[b]stop[/b] valves'
+    BoxLayout:
+        disabled: not play.playing_data
+        spacing: '3dp'
+        size_hint_x: None
+        width: self.minimum_width
+        FlatImageToggleButton:
+            id: relay_0
+            source: 'radiobox-blank.png' if self.state == 'normal' else 'radiobox-marked.png'
+            flat_color: app.theme.accent
+            on_release: root.set_valves(relay_0=self.state == 'down')
+        FlatImageToggleButton:
+            id: relay_1
+            source: 'radiobox-blank.png' if self.state == 'normal' else 'radiobox-marked.png'
+            flat_color: app.theme.accent
+            on_release: root.set_valves(relay_1=self.state == 'down')
+        FlatImageToggleButton:
+            id: relay_2
+            source: 'radiobox-blank.png' if self.state == 'normal' else 'radiobox-marked.png'
+            flat_color: app.theme.accent
+            on_release: root.set_valves(relay_2=self.state == 'down')
+        FlatImageToggleButton:
+            id: relay_3
+            source: 'radiobox-blank.png' if self.state == 'normal' else 'radiobox-marked.png'
+            flat_color: app.theme.accent
+            on_release: root.set_valves(relay_3=self.state == 'down')
+    FlatImageButton:
+        board_settings: board_settings.__self__
+        scale_down_color: True
+        source: 'flat_dots_vertical.png'
+        flat_color: app.theme.accent
+        on_release: self.board_settings.open(self)
+        FlatDropDown:
+            flat_color: app.theme.primary_text
+            flat_border_color: app.theme.divider
+            do_scroll: False, True
+            id: board_settings
+            on_kv_post: self.parent.remove_widget(self)
+            GridLayout:
+                disabled: bool(play.playing_data)
+                size_hint_y: None
+                height: self.minimum_height
+                spacing: '10dp', '5dp'
+                size_hint_min_x: self.minimum_width
+                cols: 2
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Device:'
+                AccentThemedToggleButton:
+                    text: 'Virtual device'
+                    state: 'down' if root.virtual else 'normal'
+                    size_hint_min_x: self.texture_size[0]
+                    padding_x: '10dp'
+                    on_state: root.virtual = self.state == 'down'
+                    hover_text: 'Device is virtual/real'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Device address:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: str(root.dev_address)
+                    on_text: root.dev_address = int(self.text or 0)
+                    hint_text: 'address'
+                    input_filter: 'int'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Remote server:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: root.remote_server
+                    on_text: root.remote_server = self.text
+                    hint_text: 'host name'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Remote port:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: str(root.remote_port)
+                    on_text: root.remote_port = int(self.text or 0)
+                    hint_text: 'port number'
+                    input_filter: 'int'
+
+
+<MFCWidget>:
+    spacing: '7dp'
+    size_hint: None, None
+    size: self.minimum_width, '25dp'
+    on_data_update:
+        if not state.focus: state.text = '{:0.4f}'.format(self.device.state)
+    FlatImageToggleButton:
+        id: play
+        playing_data: self.state == 'down'
+        source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
+        flat_color: app.theme.accent
+        on_release: root.start() if self.state == 'down' else root.stop()
+        hover_text: '[b]start[/b] valves' if self.state == 'normal' else '[b]stop[/b] valves'
+    FlatSizedTextInput:
+        id: state
+        disabled: not play.playing_data
+        background_color: app.theme.primary_text
+        size_hint_min_x: '60dp'
+        input_filter: 'float'
+        on_text_validate: root.set_value(float(self.text or 0))
+    FlatImageButton:
+        board_settings: board_settings.__self__
+        scale_down_color: True
+        source: 'flat_dots_vertical.png'
+        flat_color: app.theme.accent
+        on_release: self.board_settings.open(self)
+        FlatDropDown:
+            flat_color: app.theme.primary_text
+            flat_border_color: app.theme.divider
+            do_scroll: False, True
+            id: board_settings
+            on_kv_post: self.parent.remove_widget(self)
+            GridLayout:
+                disabled: bool(play.playing_data)
+                size_hint_y: None
+                height: self.minimum_height
+                spacing: '10dp', '5dp'
+                size_hint_min_x: self.minimum_width
+                cols: 2
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Device:'
+                AccentThemedToggleButton:
+                    text: 'Virtual device'
+                    state: 'down' if root.virtual else 'normal'
+                    size_hint_min_x: self.texture_size[0]
+                    padding_x: '10dp'
+                    on_state: root.virtual = self.state == 'down'
+                    hover_text: 'Device is virtual/real'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Device address:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: str(root.dev_address)
+                    on_text: root.dev_address = int(self.text or 0)
+                    hint_text: 'address'
+                    input_filter: 'int'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Remote server:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: root.remote_server
+                    on_text: root.remote_server = self.text
+                    hint_text: 'host name'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Remote port:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: str(root.remote_port)
+                    on_text: root.remote_port = int(self.text or 0)
+                    hint_text: 'port number'
+                    input_filter: 'int'

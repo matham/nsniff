@@ -11,10 +11,31 @@ from kivy.properties import ObjectProperty
 
 from pymoa.device import Device
 from pymoa.device.digital import DigitalPort
+from pymoa.device.analog import AnalogChannel
 from pymoa_remote.client import apply_executor, apply_generator_executor
 
 
-class StratuscentBase(Device):
+class DeviceContext:
+
+    async def __aenter__(self):
+        await self.open_device()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close_device()
+
+    def open_device(self):
+        raise NotImplementedError
+
+    def close_device(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def get_time():
+        return perf_counter()
+
+
+class StratuscentBase(Device, DeviceContext):
 
     _config_props_ = ('com_port', )
 
@@ -33,19 +54,6 @@ class StratuscentBase(Device):
     def __init__(self, com_port: str = '', **kwargs):
         self.com_port = com_port
         super().__init__(**kwargs)
-
-    async def __aenter__(self):
-        await self.open_device()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close_device()
-
-    def open_device(self):
-        raise NotImplementedError
-
-    def close_device(self):
-        raise NotImplementedError
 
     def is_open(self):
         raise NotImplementedError
@@ -73,10 +81,6 @@ class StratuscentBase(Device):
     def get_data_row(self):
         return [self.timestamp] + self.sensors_data + [
             self.precision_resistor, self.temp, self.humidity, self.device_id]
-
-    @staticmethod
-    def get_time():
-        return perf_counter()
 
 
 class StratuscentSensor(StratuscentBase):
@@ -190,7 +194,7 @@ class VirtualStratuscentSensor(StratuscentBase):
                     break
 
 
-class MODIOBase(DigitalPort):
+class MODIOBase(DigitalPort, DeviceContext):
 
     _config_props_ = ('dev_address', )
 
@@ -233,22 +237,9 @@ class MODIOBase(DigitalPort):
         self.dev_address = dev_address
         super().__init__(**kwargs)
 
-    async def __aenter__(self):
-        await self.open_device()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close_device()
-
-    def open_device(self):
-        raise NotImplementedError
-
-    def close_device(self):
-        raise NotImplementedError
-
     def _combine_write_args(
             self, high: Iterable[str], low: Iterable[str],
-            kwargs: Dict[str, bool]):
+            kwargs: bool):
         relay_map = self._relay_map
         value = 0
 
@@ -256,6 +247,9 @@ class MODIOBase(DigitalPort):
             kwargs[item] = True
         for item in low:
             kwargs[item] = False
+        for item in {
+                'relay_0', 'relay_1', 'relay_2', 'relay_3'} - kwargs.keys():
+            kwargs[item] = getattr(self, item)
 
         for name, val in kwargs.items():
             if val:
@@ -283,10 +277,6 @@ class MODIOBase(DigitalPort):
             setattr(self, name, value)
 
         self.dispatch('on_data_update', self)
-
-    @staticmethod
-    def get_time():
-        return perf_counter()
 
     def write_states(
             self, high: Iterable[str] = (), low: Iterable[str] = (), **kwargs):
@@ -393,3 +383,72 @@ class VirtualMODIOBoard(MODIOBase):
             analog_vals[chan] = random() * 3.3
 
         return opto_val, analog_vals, self.get_time()
+
+
+class MFCBase(AnalogChannel, DeviceContext):
+
+    _config_props_ = ('dev_address', )
+
+    dev_address: int = 0
+
+    state: float = 0
+
+    def __init__(self, dev_address: int = 0, **kwargs):
+        self.dev_address = dev_address
+        super().__init__(**kwargs)
+
+    def update_data(self, result):
+        self.state, self.timestamp = result
+        self.dispatch('on_data_update', self)
+
+    async def write_state(self, value: float, **kwargs):
+        raise NotImplementedError
+
+    def _read_state(self):
+        raise NotImplementedError
+
+    @apply_executor(callback='update_data')
+    def read_state(self):
+        return self._read_state()
+
+    @apply_generator_executor(callback='update_data')
+    def pump_state(self):
+        while True:
+            yield self._read_state()
+
+
+class MFC(MFCBase):
+
+    @apply_executor
+    def open_device(self):
+        pass
+
+    @apply_executor
+    def close_device(self):
+        pass
+
+    async def write_state(self, value: float, **kwargs):
+        pass
+
+    def _read_state(self):
+        pass
+
+
+class VirtualMFC(MFCBase):
+
+    @apply_executor
+    def open_device(self):
+        pass
+
+    @apply_executor
+    def close_device(self):
+        pass
+
+    @apply_executor
+    def write_state(self, value: float, **kwargs):
+        self.state = value
+
+    def _read_state(self):
+        sleep(.1)
+        state = max(self.state + random() * .01 - .005, 0)
+        return state, self.get_time()

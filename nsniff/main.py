@@ -20,7 +20,7 @@ from kivy.core.audio import SoundLoader
 from kivy_trio.context import kivy_trio_context_manager
 
 import nsniff
-from nsniff.widget import DeviceDisplay
+from nsniff.widget import DeviceDisplay, ValveBoardWidget, MFCWidget
 from nsniff.device import StratuscentBase
 
 __all__ = ('NSniffApp', 'run_app')
@@ -74,10 +74,12 @@ class NSniffApp(BaseKivyApp):
 
     _config_props_ = (
         'last_directory', 'event_times_countdown',
-        'event_times_countdown_default', 'pixel_height',
+        'event_times_countdown_default', 'pixel_height', 'n_valve_boards',
+        'n_mfc', 'n_sensors',
     )
 
-    _config_children_ = {'devices': 'devices'}
+    _config_children_ = {
+        'devices': 'devices', 'valve_boards': 'valve_boards', 'mfcs': 'mfcs'}
 
     last_directory = StringProperty('~')
     """The last directory opened in the GUI.
@@ -95,6 +97,10 @@ class NSniffApp(BaseKivyApp):
     '''
 
     filename: str = StringProperty('')
+
+    _dev_container = None
+
+    n_sensors: int = NumericProperty(1)
 
     devices: List[DeviceDisplay] = []
 
@@ -123,18 +129,36 @@ class NSniffApp(BaseKivyApp):
 
     pixel_height: int = NumericProperty(4)
 
-    _dev_container = None
-
     _valve_container = None
 
+    n_valve_boards: int = NumericProperty(1)
+
+    valve_boards: List[ValveBoardWidget] = []
+
     _mfc_container = None
+
+    n_mfc: int = NumericProperty(1)
+
+    mfcs: List[MFCWidget] = []
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.devices = []
+        self.valve_boards = []
+        self.mfcs = []
         self._event_times_countdown_dict = {}
+
         self.fbind('filename', self.set_tittle)
         self.fbind('event_times_countdown', self._parse_event_times)
+        self.fbind(
+            'n_sensors', self._update_num_io, 'devices', 'n_sensors',
+            '_dev_container', DeviceDisplay)
+        self.fbind(
+            'n_valve_boards', self._update_num_io, 'valve_boards',
+            'n_valve_boards', '_valve_container', ValveBoardWidget)
+        self.fbind(
+            'n_mfc', self._update_num_io, 'mfcs', 'n_mfc',
+            '_mfc_container', MFCWidget)
 
     def load_app_kv(self):
         """Loads the app's kv files, if not yet loaded.
@@ -157,26 +181,15 @@ class NSniffApp(BaseKivyApp):
         self.set_tittle()
         HighightButtonBehavior.init_class()
 
-        self.add_device()
-
         self.load_app_settings_from_file()
         self.apply_app_settings()
         Clock.schedule_interval(self._update_clock, .25)
         self._parse_event_times()
 
-    def apply_config_child(self, name, prop, obj, config):
-        if prop == 'devices':
-            if len(config) >= len(self.devices):
-                for _ in range(len(config) - len(self.devices)):
-                    self.add_device()
-            else:
-                for _ in range(len(self.devices) - len(config)):
-                    self.remove_device(self.devices[-1])
-
-            for dev, conf in zip(self.devices, config):
-                apply_config(dev, conf)
-        else:
-            apply_config(obj, config)
+    def apply_config_property(self, name, value):
+        setattr(self, name, value)
+        if name in {'n_sensors', 'n_valve_boards', 'n_mfc'}:
+            self.property(name).dispatch(self)
 
     def set_tittle(self, *largs):
         """Periodically called by the Kivy Clock to update the title.
@@ -202,7 +215,12 @@ class NSniffApp(BaseKivyApp):
         super().clean_up()
         HighightButtonBehavior.uninit_class()
         self.dump_app_settings_to_file()
-        for dev in self.devices:
+
+        for dev in self.devices[:]:
+            dev.stop()
+        for dev in self.valve_boards[:]:
+            dev.stop()
+        for dev in self.mfcs[:]:
             dev.stop()
 
         self.close_file()
@@ -211,21 +229,23 @@ class NSniffApp(BaseKivyApp):
         with kivy_trio_context_manager():
             await super().async_run(*args, **kwargs)
 
-    def add_device(self) -> None:
-        if self.filename:
-            raise TypeError('Cannot add device while saving data')
+    def _update_num_io(
+            self, widgets_name, n_items_name, widgets_container_name,
+            widget_cls, *args):
+        n_items = getattr(self, n_items_name)
+        widgets = getattr(self, widgets_name)
+        widgets_container = getattr(self, widgets_container_name)
 
-        dev = DeviceDisplay()
-        self._dev_container.add_widget(dev)
-        self.devices.append(dev)
-
-    def remove_device(self, device: DeviceDisplay) -> None:
-        if self.filename:
-            raise TypeError('Cannot remove device while saving data')
-
-        device.stop()
-        self._dev_container.remove_widget(device)
-        self.devices.remove(device)
+        if n_items < len(widgets):
+            for dev in widgets[n_items:]:
+                dev.stop()
+                widgets_container.remove_widget(dev)
+                widgets.remove(dev)
+        else:
+            for _ in range(n_items - len(widgets)):
+                dev = widget_cls()
+                widgets_container.add_widget(dev)
+                widgets.append(dev)
 
     def log_event(self, name, display=False):
         t = StratuscentBase.get_time()

@@ -3,6 +3,7 @@ import trio
 from typing import List, Dict, Optional, Tuple
 from matplotlib import cm
 from kivy_trio.to_trio import kivy_run_in_async, mark, KivyEventCancelled
+from kivy_trio.to_kivy import AsyncKivyEventQueue
 from pymoa_remote.threading import ThreadExecutor
 from pymoa_remote.socket.websocket_client import WebSocketExecutor
 from base_kivy_app.app import app_error
@@ -19,9 +20,10 @@ from kivy.uix.widget import Widget
 from kivy_garden.graph import Graph
 
 from nsniff.device import StratuscentSensor, VirtualStratuscentSensor, \
-    StratuscentBase
+    StratuscentBase, MODIOBase, MODIOBoard, VirtualMODIOBoard, MFCBase, MFC, \
+    VirtualMFC
 
-__all__ = ('DeviceDisplay', )
+__all__ = ('DeviceDisplay', 'ValveBoardWidget', 'MFCWidget')
 
 
 class SniffGraph(Graph):
@@ -126,24 +128,56 @@ class SniffGraph(Graph):
         return False
 
 
-class DeviceDisplay(BoxLayout):
+class ExecuteDevice:
 
     __events__ = ('on_data_update', )
 
-    _config_props_ = (
-        'com_port', 'virtual', 'log_z', 'auto_range', 'global_range',
-        'range_chan', 'n_channels', 'remote_server', 'remote_port')
-
-    com_port: str = StringProperty('')
+    _config_props_ = ('virtual', 'remote_server', 'remote_port')
 
     remote_server: str = StringProperty('')
 
     remote_port: int = NumericProperty(0)
 
-    device: Optional[StratuscentBase] = ObjectProperty(
-        None, allownone=True, rebind=True)
+    device = None
 
     virtual = BooleanProperty(False)
+
+    unique_dev_id: str = ''
+
+    def on_data_update(self, *args):
+        pass
+
+    async def _run_device(self, executor):
+        raise NotImplementedError
+
+    async def run_device(self):
+        if self.remote_server:
+            async with trio.open_nursery() as nursery:
+                async with WebSocketExecutor(
+                        nursery=nursery, server=self.remote_server,
+                        port=self.remote_port) as executor:
+                    async with executor.remote_instance(
+                            self.device, self.unique_dev_id):
+                        async with self.device:
+                            await self._run_device(executor)
+        else:
+            async with ThreadExecutor() as executor:
+                async with executor.remote_instance(
+                        self.device, self.unique_dev_id):
+                    async with self.device:
+                        await self._run_device(executor)
+
+
+class DeviceDisplay(BoxLayout, ExecuteDevice):
+
+    _config_props_ = (
+        'com_port', 'log_z', 'auto_range', 'global_range',
+        'range_chan', 'n_channels')
+
+    com_port: str = StringProperty('')
+
+    device: Optional[StratuscentBase] = ObjectProperty(
+        None, allownone=True, rebind=True)
 
     n_channels = 32
 
@@ -199,6 +233,10 @@ class DeviceDisplay(BoxLayout):
 
     _event_plots_trigger = None
 
+    @property
+    def unique_dev_id(self) -> str:
+        return self.com_port
+
     def __init__(self, **kwargs):
         self._plot_colors = cm.get_cmap('tab20').colors + \
                             cm.get_cmap('tab20b').colors
@@ -253,9 +291,6 @@ class DeviceDisplay(BoxLayout):
             graph3.remove_plot(plot)
             graph3.add_plot(plot)
 
-    def on_data_update(self, instance):
-        pass
-
     def create_plot(self, graph_3d, graph_2d):
         self.graph_3d = graph_3d
         self.plot_3d = plot = ContourPlot()
@@ -293,8 +328,6 @@ class DeviceDisplay(BoxLayout):
         tex.blit_buffer(data.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
 
     def process_data(self, device: StratuscentBase):
-        self.dispatch('on_data_update', self)
-
         if self._data is None:
             self.t0 = device.timestamp
             self._data = np.empty(
@@ -478,24 +511,12 @@ class DeviceDisplay(BoxLayout):
         self._draw_trigger()
 
     async def _run_device(self, executor):
-        async with executor.remote_instance(self.device, self.com_port):
-            async with self.device as device:
-                async with device.read_sensor_values() as aiter:
-                    async for _ in aiter:
-                        if self.done:
-                            break
-                        self.process_data(device)
-
-    async def run_device(self):
-        if self.remote_server:
-            async with trio.open_nursery() as nursery:
-                async with WebSocketExecutor(
-                        nursery=nursery, server=self.remote_server,
-                        port=self.remote_port) as executor:
-                    await self._run_device(executor)
-        else:
-            async with ThreadExecutor() as executor:
-                await self._run_device(executor)
+        device = self.device
+        async with device.read_sensor_values() as aiter:
+            async for _ in aiter:
+                if self.done:
+                    break
+                self.process_data(device)
 
     @app_error
     @kivy_run_in_async
@@ -521,6 +542,7 @@ class DeviceDisplay(BoxLayout):
             cls = StratuscentSensor
 
         self.device = cls(com_port=self.com_port)
+        self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
 
         try:
             yield mark(self.run_device)
@@ -574,3 +596,111 @@ class DeviceDisplay(BoxLayout):
         p.points = [(t, 0), (t, self.graph_3d.ymax)]
         self.graph_3d.add_plot(p)
         self._event_plots[1].append(p)
+
+
+class ValveBoardWidget(BoxLayout, ExecuteDevice):
+
+    _config_props_ = ('dev_address', )
+
+    dev_address: int = NumericProperty(0)
+
+    device: Optional[MODIOBase] = ObjectProperty(
+        None, allownone=True, rebind=True)
+
+    _event_queue: Optional[AsyncKivyEventQueue] = None
+
+    @property
+    def unique_dev_id(self) -> str:
+        return str(self.dev_address)
+
+    async def _run_device(self, executor):
+        device = self.device
+        async with self._event_queue as queue:
+            async for low, high, kwargs in queue:
+                await device.write_states(high, low, **kwargs)
+
+    @app_error
+    @kivy_run_in_async
+    def start(self):
+        if self.virtual:
+            cls = VirtualMODIOBoard
+        else:
+            cls = MODIOBoard
+
+        self.device = cls(dev_address=self.dev_address)
+        self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
+        self._event_queue = AsyncKivyEventQueue()
+
+        try:
+            yield mark(self.run_device)
+        except KivyEventCancelled:
+            pass
+        finally:
+            self._event_queue.stop()
+            self._event_queue = None
+            self.device = None
+
+    @app_error
+    def stop(self):
+        if self._event_queue is not None:
+            self._event_queue.stop()
+
+    def set_valves(self, low=(), high=(), **kwargs):
+        self._event_queue.add_item(low, high, kwargs)
+
+
+class MFCWidget(BoxLayout, ExecuteDevice):
+
+    _config_props_ = ('dev_address', )
+
+    dev_address: int = NumericProperty(0)
+
+    device: Optional[MFCBase] = ObjectProperty(
+        None, allownone=True, rebind=True)
+
+    _event_queue: List[float] = []
+
+    _done = False
+
+    @property
+    def unique_dev_id(self) -> str:
+        return str(self.dev_address)
+
+    async def _run_device(self, executor):
+        device = self.device
+        queue = self._event_queue
+        while not self._done:
+            i = len(queue)
+            if i:
+                await device.write_state(queue[i - 1])
+                del queue[:i]
+            await device.read_state()
+
+    @app_error
+    @kivy_run_in_async
+    def start(self):
+        if self.virtual:
+            cls = VirtualMFC
+        else:
+            cls = MFC
+
+        self.device = cls(dev_address=self.dev_address)
+        self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
+        self._event_queue = []
+        self._done = False
+
+        try:
+            yield mark(self.run_device)
+        except KivyEventCancelled:
+            pass
+        finally:
+            self._done = True
+            self._event_queue = []
+            self.device = None
+
+    @app_error
+    def stop(self):
+        self._done = True
+
+    def set_value(self, value):
+        self._event_queue.append(value)
