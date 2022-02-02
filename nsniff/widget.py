@@ -651,9 +651,11 @@ class ValveBoardWidget(BoxLayout, ExecuteDevice):
 
 class MFCWidget(BoxLayout, ExecuteDevice):
 
-    _config_props_ = ('dev_address', )
+    _config_props_ = ('dev_address', 'com_port')
 
     dev_address: int = NumericProperty(0)
+
+    com_port: str = StringProperty('')
 
     device: Optional[MFCBase] = ObjectProperty(
         None, allownone=True, rebind=True)
@@ -684,7 +686,7 @@ class MFCWidget(BoxLayout, ExecuteDevice):
         else:
             cls = MFC
 
-        self.device = cls(dev_address=self.dev_address)
+        self.device = cls(dev_address=self.dev_address, com_port=self.com_port)
         self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
         self._event_queue = []
         self._done = False

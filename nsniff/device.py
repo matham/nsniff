@@ -1,6 +1,7 @@
 from typing import Optional, List, Union, Iterable, Dict
 from random import random, shuffle, randint
 from time import perf_counter, sleep
+import re
 import serial
 try:
     from smbus2 import SMBus, i2c_msg
@@ -387,14 +388,17 @@ class VirtualMODIOBoard(MODIOBase):
 
 class MFCBase(AnalogChannel, DeviceContext):
 
-    _config_props_ = ('dev_address', )
+    _config_props_ = ('dev_address', 'com_port')
 
     dev_address: int = 0
 
+    com_port: str = ''
+
     state: float = 0
 
-    def __init__(self, dev_address: int = 0, **kwargs):
+    def __init__(self, dev_address: int = 0, com_port: str = '', **kwargs):
         self.dev_address = dev_address
+        self.com_port = com_port
         super().__init__(**kwargs)
 
     def update_data(self, result):
@@ -419,19 +423,75 @@ class MFCBase(AnalogChannel, DeviceContext):
 
 class MFC(MFCBase):
 
+    device: Optional[serial.Serial] = None
+
+    _rate_pat = None
+
     @apply_executor
     def open_device(self):
-        pass
+        dev = self.dev_address
+        self._rate_pat = re.compile(
+            rf'!{dev:02X},([0-9.]+)\r\n'.encode('ascii'))
+
+        ser = self.device = serial.Serial()
+        ser.port = self.com_port
+        ser.baudrate = 9600
+        ser.bytesize = serial.EIGHTBITS  # number of bits per bytes
+        ser.parity = serial.PARITY_NONE  # set parity check: no parity
+        ser.stopbits = serial.STOPBITS_ONE  # number of stop bits
+        # ser.timeout = None          #block read
+        ser.timeout = 10  # non-block read
+        # ser.timeout = 2              #timeout block read
+        ser.xonxoff = False  # disable software flow control
+        ser.rtscts = False  # disable hardware (RTS/CTS) flow control
+        ser.dsrdtr = False  # disable hardware (DSR/DTR) flow control
+        ser.writeTimeout = 10  # timeout for write
+        ser.open()
+
+        ser.write(f'!{dev:02X},M,D\r\n'.encode('ascii'))
+        read = f'!{dev:02X},MD\r\n'.encode('ascii')
+        data = ser.read(len(read))
+        if data != read:
+            raise IOError(
+                f'Failed setting MFC to digital mode. '
+                f'Expected "{read}", got "{data}"')
+
+        ser.write(f'!{dev:02X},U,SLPM\r\n'.encode('ascii'))
+        read = f'!{dev:02X},USLPM\r\n'.encode('ascii')
+        data = ser.read(len(read))
+        if data != read:
+            raise IOError(
+                f'Failed setting MFC to use SLPM units. '
+                f'Expected "{read}", got "{data}"')
 
     @apply_executor
     def close_device(self):
-        pass
+        if self.device is not None:
+            self.device.close()
+            self.device = None
 
-    async def write_state(self, value: float, **kwargs):
-        pass
+    @apply_executor
+    def write_state(self, value: float, **kwargs):
+        dev = self.dev_address
+        ser = self.device
+
+        ser.write(f'!{dev:02X},S,{value:.3f}\r\n'.encode('ascii'))
+        read = f'!{dev:02X},S{value:.3f}\r\n'.encode('ascii')
+        data = ser.read(len(read))
+        if data != read:
+            raise IOError(
+                f'Failed setting MFC rate. Expected "{read}", got "{data}"')
 
     def _read_state(self):
-        pass
+        dev = self.dev_address
+        ser = self.device
+
+        ser.write(f'!{dev:02X},F\r\n'.encode('ascii'))
+        data = ser.read_until(b'\n', 24)
+        m = re.match(self._rate_pat, data)
+        if m is None:
+            raise IOError(f'Failed to read MFC rate. Got "{data}"')
+        return float(m.group(1).decode('ascii')), self.get_time()
 
 
 class VirtualMFC(MFCBase):
