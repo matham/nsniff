@@ -10,10 +10,9 @@
         Rectangle:
             pos: self.pos
             size: self.size
-    StackLayout:
+    BoxLayout:
         size_hint_y: None
         height: '44dp'
-        orientation: 'lr-tb'
         padding: '10dp', '5dp'
         spacing: '5dp'
         canvas:
@@ -23,19 +22,91 @@
                 pos: self.pos
                 size: self.size
         FlatImageButton:
-            disabled: bool(app.filename)
+            disabled: bool(app.filename) or app.stage.playing
             scale_down_color: True
             source: 'flat_save.png'
             flat_color: app.theme.accent
             hover_text: "Log to file"
-            on_release: app.open_filechooser(callback=app.save_file_callback, mode='save', target=app.last_directory, title='Log to csv file', filters=['*.csv', '*.*'])
+            on_release: app.open_filechooser(callback=app.save_file_callback, mode='save', target=app.last_directory, title='Log to H5 file', filters=['*.h5', '*.*'])
         FlatImageButton:
-            disabled: not app.filename
+            disabled: not app.filename or app.stage.playing
             scale_down_color: True
             source: 'flat_stop.png'
             flat_color: app.theme.accent
             on_release: app.close_file()
             hover_text: 'Stop logging'
+        FlatDivider:
+            color: app.theme.divider
+        FlatImageButton:
+            disabled: app.stage.playing
+            scale_down_color: True
+            source: 'flat_upload.png'
+            flat_color: app.theme.accent
+            hover_text: "Load protocol"
+            on_release: app.open_filechooser(callback=app.stage.load_protocol, target=app.stage.last_directory, title='Load protocol', filters=['*.csv', '*.*'])
+        FlatSizedTextInput:
+            id: stage_key_text
+            disabled: app.stage.playing or stage_key.state == 'normal'
+            background_color: app.theme.primary_text
+            size_hint_x: None
+            width: '60dp'
+            hint_text: 'key'
+            canvas.after:
+                Color:
+                    rgba: 1, .47, .39, (1 if app.global_focus and not self.disabled else 0)
+                Line:
+                    width: 1
+                    points: [self.x, self.y, self.right, self.y, self.right, self.top, self.x, self.top, self.x, self.y]
+        FlatImageToggleButton:
+            id: play_stage
+            disabled: not app.stage.filename
+            source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
+            flat_color: app.theme.accent
+            on_release: app.stage.start(stage_key_text.text, alarm.state == 'down') if self.state == 'down' else app.stage.stop()
+            hover_text: '[b]start[/b] stages' if self.state == 'normal' else '[b]stop[/b] stages'
+            state: 'down' if app.stage.playing else 'normal'
+        ThemedLabel:
+            size_hint_x: None
+            width: self.texture_size[0]
+            text: '{} / {} ({}/{})'.format(app.stage.stage_remaining_time, app.stage.remaining_time, app.stage.stage_i, app.stage.n_stages)
+        FlatImageButton:
+            protocol_settings: protocol_settings.__self__
+            scale_down_color: True
+            source: 'flat_dots_vertical.png'
+            flat_color: app.theme.accent
+            on_release: self.protocol_settings.open(self)
+            FlatDropDown:
+                flat_color: app.theme.primary_text
+                flat_border_color: app.theme.divider
+                do_scroll: False, True
+                id: protocol_settings
+                on_kv_post: self.parent.remove_widget(self)
+                GridLayout:
+                    size_hint_y: None
+                    height: self.minimum_height
+                    spacing: '10dp', '5dp'
+                    size_hint_min_x: self.minimum_width
+                    cols: 2
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
+                        text: 'End alarm:'
+                    AccentThemedToggleButton:
+                        id: alarm
+                        disabled: app.stage.playing
+                        text: 'true' if self.state == 'down' else 'false'
+                        size_hint_min_x: self.texture_size[0]
+                        padding_x: '10dp'
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
+                        text: 'Key start:'
+                    AccentThemedToggleButton:
+                        id: stage_key
+                        disabled: app.stage.playing
+                        text: 'true' if self.state == 'down' else 'false'
+                        size_hint_min_x: self.texture_size[0]
+                        padding_x: '10dp'
         FlatDivider:
             color: app.theme.divider
         FlatLabel:
@@ -69,6 +140,16 @@
                     spacing: '10dp', '5dp'
                     size_hint_min_x: self.minimum_width
                     cols: 2
+                    ThemedLabel:
+                        size_hint: None, None
+                        size: self.texture_size[0], '24dp'
+                        text: 'File compression:'
+                    ThemedSpinner:
+                        values: ['Auto', 'ZIP', 'None']
+                        text: app.compression
+                        on_text: app.compression = self.text
+                        size_hint_x: None
+                        width: self.minimum_width
                     ThemedLabel:
                         size_hint: None, None
                         size: self.texture_size[0], '24dp'
@@ -113,75 +194,6 @@
                         text: str(app.n_mfc)
                         on_focus: if not self.focus: app.n_mfc = int(self.text or 0)
                         input_filter: 'int'
-        FlatDivider:
-            color: app.theme.divider
-        FlatSizedTextInput:
-            disabled: not app.filename
-            id: event_name
-            background_color: app.theme.primary_text
-            size_hint_x: None
-            width: '100dp'
-            hint_text: 'event name'
-        AccentThemedButton:
-            disabled: not app.filename
-            text: 'Add event'
-            size_hint_x: None
-            width: self.texture_size[0]
-            padding_x: '10dp'
-            on_release: app.log_event(event_name.text)
-            canvas:
-                Color:
-                    rgba: 1, .47, .39, (1 if app.global_focus else 0)
-                Line:
-                    width: 2
-                    points: [self.x, self.y, self.right, self.y, self.right, self.top, self.x, self.top, self.x, self.y]
-        ThemedLabel:
-            size_hint_x: None
-            width: self.texture_size[0]
-            text: app.remaining_time
-        FlatImageButton:
-            event_times: event_times.__self__
-            scale_down_color: True
-            source: 'flat_dots_vertical.png'
-            flat_color: app.theme.accent
-            on_release: self.event_times.open(self)
-            FlatDropDown:
-                flat_color: app.theme.primary_text
-                flat_border_color: app.theme.divider
-                do_scroll: False, True
-                id: event_times
-                on_kv_post: self.parent.remove_widget(self)
-                GridLayout:
-                    spacing: '10dp'
-                    size_hint: None, None
-                    size: self.minimum_size
-                    padding: '10dp'
-                    cols: 2
-                    ThemedLabel:
-                        text: 'default'
-                    FlatSizedTextInput:
-                        background_color: app.theme.primary_text
-                        size_hint_x: None
-                        width: '70dp'
-                        on_focus: if not self.focus: app.event_times_countdown_default = float(self.text or 0) or 180
-                        text: str(app.event_times_countdown_default)
-                        hint_text: 'duration'
-                        input_filter: 'float'
-                    FlatSizedTextInput:
-                        background_color: app.theme.primary_text
-                        size_hint_x: None
-                        width: '70dp'
-                        on_focus: if not self.focus: app.event_times_countdown[0] = (self.text, app.event_times_countdown[0][1])
-                        text: app.event_times_countdown[0][0]
-                        hint_text: 'events'
-                    FlatSizedTextInput:
-                        background_color: app.theme.primary_text
-                        size_hint_x: None
-                        width: '70dp'
-                        on_focus: if not self.focus: app.event_times_countdown[0] = (app.event_times_countdown[0][0], float(self.text or 0) or 60)
-                        text: str(app.event_times_countdown[0][1])
-                        hint_text: 'duration'
-                        input_filter: 'float'
     ScrollView:
         bar_width: '15dp'
         scroll_type: ['bars']
@@ -192,6 +204,7 @@
             spacing: '10dp'
             size_hint_y: None
             height: self.minimum_height
+            size_hint_min_x: self.minimum_width
             canvas:
                 Color:
                     rgba: app.theme.primary
@@ -205,6 +218,7 @@
                 BoxLayout:
                     on_kv_post: app._valve_container = self.__self__
                     spacing: '10dp'
+                    size_hint_min_x: self.minimum_width
                 FlatDivider:
                     size_hint_y: None
                     height: '24dp'
@@ -212,12 +226,14 @@
                 BoxLayout:
                     on_kv_post: app._mfc_container = self.__self__
                     spacing: '10dp'
+                    size_hint_min_x: self.minimum_width
             BoxLayout:
                 on_kv_post: app._dev_container = self.__self__
                 orientation: 'vertical'
                 spacing: '10dp'
                 size_hint_y: None
                 height: self.minimum_height
+                size_hint_min_x: self.minimum_width
 
 
 <DeviceDisplay>:
@@ -226,6 +242,7 @@
     padding: '20dp', '5dp'
     size_hint_y: None
     height: self.minimum_height
+    size_hint_min_x: self.minimum_width
     canvas:
         Color:
             rgba: app.theme.primary_text
@@ -239,7 +256,6 @@
         size_hint_min_x: self.minimum_width
         FlatImageToggleButton:
             id: play
-            playing_data: self.state == 'down'
             source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
             flat_color: app.theme.accent
             on_release: root.start() if self.state == 'down' else root.stop()
@@ -332,6 +348,7 @@
                             size: self.texture_size[0], '24dp'
                             text: 'Device:'
                         AccentThemedToggleButton:
+                            disabled: root.is_running
                             text: 'Virtual device'
                             state: 'down' if root.virtual else 'normal'
                             size_hint_min_x: self.texture_size[0]
@@ -343,7 +360,7 @@
                             size: self.texture_size[0], '24dp'
                             text: 'COM port:'
                         FlatSizedTextInput:
-                            disabled: bool(play.playing_data)
+                            disabled: root.is_running
                             background_color: app.theme.primary_text
                             size_hint_min_x: '100dp'
                             text: root.com_port
@@ -354,7 +371,7 @@
                             size: self.texture_size[0], '24dp'
                             text: 'Remote server:'
                         FlatSizedTextInput:
-                            disabled: bool(play.playing_data)
+                            disabled: root.is_running
                             background_color: app.theme.primary_text
                             size_hint_min_x: '100dp'
                             text: root.remote_server
@@ -365,13 +382,24 @@
                             size: self.texture_size[0], '24dp'
                             text: 'Remote port:'
                         FlatSizedTextInput:
-                            disabled: bool(play.playing_data)
+                            disabled: root.is_running
                             background_color: app.theme.primary_text
                             size_hint_min_x: '100dp'
                             text: str(root.remote_port)
                             on_text: root.remote_port = int(self.text or 0)
                             hint_text: 'port number'
                             input_filter: 'int'
+                        ThemedLabel:
+                            size_hint: None, None
+                            size: self.texture_size[0], '24dp'
+                            text: 'Device ID:'
+                        FlatSizedTextInput:
+                            disabled: root.is_running
+                            background_color: app.theme.primary_text
+                            size_hint_min_x: '100dp'
+                            text: root.unique_dev_id
+                            on_text: root.unique_dev_id = self.text
+                            hint_text: 'unique ID'
                         ThemedLabel:
                             size_hint: None, None
                             size: self.texture_size[0], '24dp'
@@ -584,13 +612,13 @@
         relay_3.state = 'down' if self.device.relay_3 else 'normal'
     FlatImageToggleButton:
         id: play
-        playing_data: self.state == 'down'
+        disabled: app.stage.playing
         source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
         flat_color: app.theme.accent
         on_release: root.start() if self.state == 'down' else root.stop()
         hover_text: '[b]start[/b] valves' if self.state == 'normal' else '[b]stop[/b] valves'
     BoxLayout:
-        disabled: not play.playing_data
+        disabled: not root.is_running
         spacing: '3dp'
         size_hint_x: None
         width: self.minimum_width
@@ -627,7 +655,7 @@
             id: board_settings
             on_kv_post: self.parent.remove_widget(self)
             GridLayout:
-                disabled: bool(play.playing_data)
+                disabled: root.is_running
                 size_hint_y: None
                 height: self.minimum_height
                 spacing: '10dp', '5dp'
@@ -676,6 +704,16 @@
                     on_text: root.remote_port = int(self.text or 0)
                     hint_text: 'port number'
                     input_filter: 'int'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Device ID:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: root.unique_dev_id
+                    on_text: root.unique_dev_id = self.text
+                    hint_text: 'unique ID'
 
 
 <MFCWidget>:
@@ -686,14 +724,14 @@
         if not state.focus: state.text = '{:0.4f}'.format(self.device.state)
     FlatImageToggleButton:
         id: play
-        playing_data: self.state == 'down'
+        disabled: app.stage.playing
         source: 'flat_play.png' if self.state == 'normal' else 'flat_stop.png'
         flat_color: app.theme.accent
         on_release: root.start() if self.state == 'down' else root.stop()
         hover_text: '[b]start[/b] valves' if self.state == 'normal' else '[b]stop[/b] valves'
     FlatSizedTextInput:
         id: state
-        disabled: not play.playing_data
+        disabled: not root.is_running
         background_color: app.theme.primary_text
         size_hint_min_x: '60dp'
         input_filter: 'float'
@@ -711,7 +749,7 @@
             id: board_settings
             on_kv_post: self.parent.remove_widget(self)
             GridLayout:
-                disabled: bool(play.playing_data)
+                disabled: root.is_running
                 size_hint_y: None
                 height: self.minimum_height
                 spacing: '10dp', '5dp'
@@ -770,3 +808,13 @@
                     on_text: root.remote_port = int(self.text or 0)
                     hint_text: 'port number'
                     input_filter: 'int'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Device ID:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: root.unique_dev_id
+                    on_text: root.unique_dev_id = self.text
+                    hint_text: 'unique ID'

@@ -1,6 +1,6 @@
 from typing import Optional, List, Union, Iterable, Dict
 from random import random, shuffle, randint
-from time import perf_counter, sleep
+from time import perf_counter_ns, sleep
 import re
 import serial
 try:
@@ -18,6 +18,8 @@ from pymoa_remote.client import apply_executor, apply_generator_executor
 
 class DeviceContext:
 
+    local_time: float = 0
+
     async def __aenter__(self):
         await self.open_device()
         return self
@@ -33,7 +35,7 @@ class DeviceContext:
 
     @staticmethod
     def get_time():
-        return perf_counter()
+        return perf_counter_ns() / 1e9
 
 
 class StratuscentBase(Device, DeviceContext):
@@ -60,6 +62,7 @@ class StratuscentBase(Device, DeviceContext):
         raise NotImplementedError
 
     def update_data(self, result):
+        self.local_time = self.get_time()
         values, t = result
 
         self.timestamp = t
@@ -73,15 +76,6 @@ class StratuscentBase(Device, DeviceContext):
 
     def read_sensor_values(self):
         raise NotImplementedError
-
-    @staticmethod
-    def get_data_header():
-        return ['t'] + [f'{i}' for i in range(32)] + [
-            'precision_resistor', 'temp', 'humidity', 'id']
-
-    def get_data_row(self):
-        return [self.timestamp] + self.sensors_data + [
-            self.precision_resistor, self.temp, self.humidity, self.device_id]
 
 
 class StratuscentSensor(StratuscentBase):
@@ -240,7 +234,7 @@ class MODIOBase(DigitalPort, DeviceContext):
 
     def _combine_write_args(
             self, high: Iterable[str], low: Iterable[str],
-            kwargs: bool):
+            kwargs: Dict[str, bool]):
         relay_map = self._relay_map
         value = 0
 
@@ -259,6 +253,7 @@ class MODIOBase(DigitalPort, DeviceContext):
         return value
 
     def update_write_data(self, result):
+        self.local_time = self.get_time()
         value, t = result
 
         self.timestamp = t
@@ -280,7 +275,8 @@ class MODIOBase(DigitalPort, DeviceContext):
         self.dispatch('on_data_update', self)
 
     def write_states(
-            self, high: Iterable[str] = (), low: Iterable[str] = (), **kwargs):
+            self, high: Iterable[str] = (), low: Iterable[str] = (),
+            **kwargs: bool):
         raise NotImplementedError
 
     def _read_state(self, opto=True, analog_channels: Iterable[str] = ()):
@@ -402,6 +398,7 @@ class MFCBase(AnalogChannel, DeviceContext):
         super().__init__(**kwargs)
 
     def update_data(self, result):
+        self.local_time = self.get_time()
         self.state, self.timestamp = result
         self.dispatch('on_data_update', self)
 
@@ -439,9 +436,7 @@ class MFC(MFCBase):
         ser.bytesize = serial.EIGHTBITS  # number of bits per bytes
         ser.parity = serial.PARITY_NONE  # set parity check: no parity
         ser.stopbits = serial.STOPBITS_ONE  # number of stop bits
-        # ser.timeout = None          #block read
         ser.timeout = 10  # non-block read
-        # ser.timeout = 2              #timeout block read
         ser.xonxoff = False  # disable software flow control
         ser.rtscts = False  # disable hardware (RTS/CTS) flow control
         ser.dsrdtr = False  # disable hardware (DSR/DTR) flow control

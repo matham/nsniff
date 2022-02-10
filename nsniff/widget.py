@@ -1,29 +1,47 @@
+import csv
 import numpy as np
+from threading import Thread
 import trio
+from math import ceil
+import pathlib
+from time import perf_counter, sleep
+import os.path
 from typing import List, Dict, Optional, Tuple
 from matplotlib import cm
 from kivy_trio.to_trio import kivy_run_in_async, mark, KivyEventCancelled
 from kivy_trio.to_kivy import AsyncKivyEventQueue
 from pymoa_remote.threading import ThreadExecutor
 from pymoa_remote.socket.websocket_client import WebSocketExecutor
+from pymoa_remote.client import Executor
 from base_kivy_app.app import app_error
-from kivy_garden.graph import Graph, ContourPlot, LinePlot
+from base_kivy_app.utils import pretty_time, yaml_dumps
+from tree_config import read_config_from_object
+import nixio as nix
 
 from kivy.metrics import dp
 from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
     NumericProperty, ListProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.clock import Clock
+from kivy.core.audio import SoundLoader
 from kivy.graphics.texture import Texture
 from kivy.factory import Factory
 from kivy.uix.widget import Widget
-from kivy_garden.graph import Graph
+from kivy.event import EventDispatcher
+from kivy_garden.graph import Graph, ContourPlot, LinePlot
 
 from nsniff.device import StratuscentSensor, VirtualStratuscentSensor, \
     StratuscentBase, MODIOBase, MODIOBoard, VirtualMODIOBoard, MFCBase, MFC, \
     VirtualMFC
 
-__all__ = ('DeviceDisplay', 'ValveBoardWidget', 'MFCWidget')
+__all__ = ('DeviceDisplay', 'ValveBoardWidget', 'MFCWidget', 'ExperimentStages')
+
+
+ProtocolItem = Tuple[float, List[Optional[bool]], List[Optional[float]]]
+FlatProtocolItem = Tuple[
+    float, List[Tuple['ValveBoardWidget', Dict[str, bool]]],
+    List[Tuple['MFCWidget', float]]
+]
 
 
 class SniffGraph(Graph):
@@ -132,7 +150,9 @@ class ExecuteDevice:
 
     __events__ = ('on_data_update', )
 
-    _config_props_ = ('virtual', 'remote_server', 'remote_port')
+    _config_props_ = (
+        'virtual', 'remote_server', 'remote_port', 'unique_dev_id',
+    )
 
     remote_server: str = StringProperty('')
 
@@ -142,7 +162,15 @@ class ExecuteDevice:
 
     virtual = BooleanProperty(False)
 
-    unique_dev_id: str = ''
+    unique_dev_id: str = StringProperty('')
+
+    log_file: Optional[nix.File] = None
+
+    n_time_log_sec: int = 1
+
+    log_time_arr: Optional[nix.DataArray] = None
+
+    is_running: bool = BooleanProperty(False)
 
     def on_data_update(self, *args):
         pass
@@ -151,7 +179,7 @@ class ExecuteDevice:
         raise NotImplementedError
 
     async def run_device(self):
-        if self.remote_server:
+        if self.remote_server and not self.virtual:
             async with trio.open_nursery() as nursery:
                 async with WebSocketExecutor(
                         nursery=nursery, server=self.remote_server,
@@ -166,6 +194,61 @@ class ExecuteDevice:
                         self.device, self.unique_dev_id):
                     async with self.device:
                         await self._run_device(executor)
+
+    def start(self):
+        raise NotImplementedError
+
+    def stop(self):
+        raise NotImplementedError
+
+    @staticmethod
+    def _get_next_array_num(block: nix.Block, prefix: str) -> int:
+        n = len(
+            [arr for arr in block.data_arrays if arr.name.startswith(prefix)])
+        return n
+
+    def _get_create_dev_block(self, dev_type: str) -> nix.Block:
+        f = self.log_file
+        name = f'{dev_type}_dev_{self.unique_dev_id}'
+        if name not in f.blocks:
+            f.create_block(name, dev_type)
+        return f.blocks[name]
+
+    def start_data_logging(self):
+        raise NotImplementedError
+
+    def stop_data_logging(self):
+        raise NotImplementedError
+
+    def set_logging_file(self, log_file: Optional[nix.File] = None):
+        self.log_file = log_file
+        if self.device is not None:
+            self.start_data_logging()
+
+    def clear_logging_file(self):
+        self.stop_data_logging()
+        self.log_file = None
+
+    def _create_time_log_array(
+            self, block: nix.Block, dev_type: str, arr_n: int) -> nix.DataArray:
+        return block.create_data_array(
+            f'{dev_type}_times_{arr_n}', 'times', dtype=np.float64,
+            shape=(0, 3))
+
+    async def _log_times(self, executor: Executor):
+        if self.log_time_arr is None:
+            return
+        times = [t / 1e9 for t in await executor.get_echo_clock()]
+        self.log_time_arr.append([times], 0)
+
+    def _set_array_metadata(
+            self, block: nix.Block, array: nix.DataArray) -> nix.Section:
+        sec = self.log_file.create_section(
+            f'{block.name}.{array.name}', 'metadata')
+
+        sec['config'] = yaml_dumps(read_config_from_object(self))
+        array.metadata = sec
+        return sec
 
 
 class DeviceDisplay(BoxLayout, ExecuteDevice):
@@ -233,9 +316,13 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
 
     _event_plots_trigger = None
 
-    @property
-    def unique_dev_id(self) -> str:
-        return self.com_port
+    data_arr: Optional[nix.DataArray] = None
+
+    _item_dtype: np.dtype = np.dtype([
+        ('timestamp', np.float64), ('data', np.float64, 32),
+        ('temp', np.float64), ('humidity', np.float64),
+        ('local_time', np.float64)]
+    )
 
     def __init__(self, **kwargs):
         self._plot_colors = cm.get_cmap('tab20').colors + \
@@ -328,6 +415,13 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
         tex.blit_buffer(data.tobytes(), colorfmt='rgb', bufferfmt='ubyte')
 
     def process_data(self, device: StratuscentBase):
+        arr = self.data_arr
+        if arr is not None:
+            rec = np.rec.array([
+                device.timestamp, device.sensors_data, device.temp,
+                device.humidity, device.local_time], dtype=self._item_dtype)
+            arr.append(rec)
+
         if self._data is None:
             self.t0 = device.timestamp
             self._data = np.empty(
@@ -510,13 +604,21 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
 
         self._draw_trigger()
 
-    async def _run_device(self, executor):
+    async def _run_device(self, executor: Executor):
         device = self.device
+        rate = 1 / self.n_time_log_sec
+        count = 0
+
         async with device.read_sensor_values() as aiter:
+            ts = perf_counter()
             async for _ in aiter:
                 if self.done:
                     break
                 self.process_data(device)
+
+                if perf_counter() - ts > rate * count:
+                    await self._log_times(executor)
+                    count += 1
 
     @app_error
     @kivy_run_in_async
@@ -535,6 +637,7 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
         self.t_start = None
         self.t_end = None
         self.t = 0
+        self.is_running = True
 
         if self.virtual:
             cls = VirtualStratuscentSensor
@@ -543,6 +646,7 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
 
         self.device = cls(com_port=self.com_port)
         self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
+        self.start_data_logging()
 
         try:
             yield mark(self.run_device)
@@ -550,6 +654,8 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
             pass
         finally:
             self.device = None
+            self.stop_data_logging()
+            self.is_running = False
 
     @app_error
     def stop(self):
@@ -582,11 +688,9 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
         self.max_val[channel, 0] = value
         self._draw_trigger()
 
-    @staticmethod
-    def get_data_header():
-        return StratuscentBase.get_data_header()
-
-    def add_event(self, t, name):
+    def add_event(self, t: Optional[float], name: str):
+        if t is None:
+            t = self.t
         p = LinePlot(color=(0, 0, 0), line_width=dp(3))
         p.points = [(t, .1), (t, 1)]
         self.graph_2d.add_plot(p)
@@ -596,6 +700,21 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
         p.points = [(t, 0), (t, self.graph_3d.ymax)]
         self.graph_3d.add_plot(p)
         self._event_plots[1].append(p)
+
+    def start_data_logging(self):
+        if self.log_file is None:
+            return
+
+        block = self._get_create_dev_block('stratuscent')
+        n = self._get_next_array_num(block, 'sensor')
+        self.data_arr = block.create_data_array(
+            f'sensor_{n}', 'stratuscent', dtype=self._item_dtype, data=[])
+        self.log_time_arr = self._create_time_log_array(block, 'sensor', n)
+        self._set_array_metadata(block, self.data_arr)
+
+    def stop_data_logging(self):
+        self.data_arr = None
+        self.log_time_arr = None
 
 
 class ValveBoardWidget(BoxLayout, ExecuteDevice):
@@ -609,15 +728,37 @@ class ValveBoardWidget(BoxLayout, ExecuteDevice):
 
     _event_queue: Optional[AsyncKivyEventQueue] = None
 
-    @property
-    def unique_dev_id(self) -> str:
-        return str(self.dev_address)
+    data_arr: Optional[nix.DataArray] = None
 
-    async def _run_device(self, executor):
+    _item_dtype: np.dtype = np.dtype([
+        ('timestamp', np.float64), ('data', np.uint8, 4),
+        ('local_time', np.float64)]
+    )
+
+    async def _run_device(self, executor: Executor):
         device = self.device
+        rate = 1 / self.n_time_log_sec
         async with self._event_queue as queue:
-            async for low, high, kwargs in queue:
-                await device.write_states(high, low, **kwargs)
+            while True:
+                with trio.move_on_after(rate) as cancel_scope:
+                    async for low, high, kwargs in queue:
+                        cancel_scope.shield = True
+                        await device.write_states(high, low, **kwargs)
+                        arr = self.data_arr
+                        if arr is not None:
+                            rec = np.rec.array([
+                                device.timestamp, [
+                                    device.relay_0, device.relay_1,
+                                    device.relay_2, device.relay_3],
+                                device.local_time
+                            ], dtype=self._item_dtype)
+                            arr.append(rec)
+                        cancel_scope.shield = False
+
+                if cancel_scope.cancelled_caught:
+                    await self._log_times(executor)
+                else:
+                    break
 
     @app_error
     @kivy_run_in_async
@@ -627,9 +768,11 @@ class ValveBoardWidget(BoxLayout, ExecuteDevice):
         else:
             cls = MODIOBoard
 
+        self.is_running = True
         self.device = cls(dev_address=self.dev_address)
         self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
         self._event_queue = AsyncKivyEventQueue()
+        self.start_data_logging()
 
         try:
             yield mark(self.run_device)
@@ -639,14 +782,31 @@ class ValveBoardWidget(BoxLayout, ExecuteDevice):
             self._event_queue.stop()
             self._event_queue = None
             self.device = None
+            self.stop_data_logging()
+            self.is_running = False
 
     @app_error
     def stop(self):
         if self._event_queue is not None:
             self._event_queue.stop()
 
-    def set_valves(self, low=(), high=(), **kwargs):
+    def set_valves(self, low=(), high=(), **kwargs: bool):
         self._event_queue.add_item(low, high, kwargs)
+
+    def start_data_logging(self):
+        if self.log_file is None:
+            return
+
+        block = self._get_create_dev_block('mod-io-relays')
+        n = self._get_next_array_num(block, 'relays')
+        self.data_arr = block.create_data_array(
+            f'relays_{n}', 'mod-io-relays', dtype=self._item_dtype, data=[])
+        self.log_time_arr = self._create_time_log_array(block, 'relays', n)
+        self._set_array_metadata(block, self.data_arr)
+
+    def stop_data_logging(self):
+        self.data_arr = None
+        self.log_time_arr = None
 
 
 class MFCWidget(BoxLayout, ExecuteDevice):
@@ -664,19 +824,37 @@ class MFCWidget(BoxLayout, ExecuteDevice):
 
     _done = False
 
-    @property
-    def unique_dev_id(self) -> str:
-        return str(self.dev_address)
+    data_arr: Optional[nix.DataArray] = None
 
-    async def _run_device(self, executor):
+    _item_dtype: np.dtype = np.dtype([
+        ('timestamp', np.float64), ('data', np.float64),
+        ('local_time', np.float64)]
+    )
+
+    async def _run_device(self, executor: Executor):
         device = self.device
         queue = self._event_queue
+        rate = 1 / self.n_time_log_sec
+        count = 0
+        ts = perf_counter()
+
         while not self._done:
             i = len(queue)
             if i:
                 await device.write_state(queue[i - 1])
                 del queue[:i]
             await device.read_state()
+
+            arr = self.data_arr
+            if arr is not None:
+                rec = np.rec.array([
+                    device.timestamp, device.state, device.local_time
+                ], dtype=self._item_dtype)
+                arr.append(rec)
+
+            if perf_counter() - ts > rate * count:
+                await self._log_times(executor)
+                count += 1
 
     @app_error
     @kivy_run_in_async
@@ -686,10 +864,12 @@ class MFCWidget(BoxLayout, ExecuteDevice):
         else:
             cls = MFC
 
+        self.is_running = True
         self.device = cls(dev_address=self.dev_address, com_port=self.com_port)
         self.device.fbind('on_data_update', self.dispatch, 'on_data_update')
         self._event_queue = []
         self._done = False
+        self.start_data_logging()
 
         try:
             yield mark(self.run_device)
@@ -699,6 +879,8 @@ class MFCWidget(BoxLayout, ExecuteDevice):
             self._done = True
             self._event_queue = []
             self.device = None
+            self.stop_data_logging()
+            self.is_running = False
 
     @app_error
     def stop(self):
@@ -706,3 +888,306 @@ class MFCWidget(BoxLayout, ExecuteDevice):
 
     def set_value(self, value):
         self._event_queue.append(value)
+
+    def start_data_logging(self):
+        if self.log_file is None:
+            return
+
+        block = self._get_create_dev_block('mfc')
+        n = self._get_next_array_num(block, 'mfc')
+        self.data_arr = block.create_data_array(
+            f'mfc_{n}', 'mfc', dtype=self._item_dtype, data=[])
+        self.log_time_arr = self._create_time_log_array(block, 'mfc', n)
+        self._set_array_metadata(block, self.data_arr)
+
+    def stop_data_logging(self):
+        self.data_arr = None
+        self.log_time_arr = None
+
+
+class ExperimentStages(EventDispatcher):
+
+    _config_props_ = ('last_directory', )
+
+    playing: bool = BooleanProperty(False)
+
+    remaining_time: str = StringProperty('00:00:00.0')
+
+    stage_remaining_time: str = StringProperty('00:00:00.0')
+
+    last_directory: str = StringProperty('')
+
+    _timer_ts: float = 0
+
+    _total_time: float = 0
+
+    _total_stage_time: float = 0
+
+    _sound_thread: Thread = None
+
+    _clock_event = None
+
+    _protocol_clock_event = None
+
+    _app = None
+
+    _log_file: Optional[nix.File] = None
+
+    _exp_protocol_text: str = ''
+
+    filename: str = StringProperty('')
+
+    protocol: Dict[str, List[ProtocolItem]] = {}
+
+    n_stages: int = NumericProperty(0)
+
+    stage_i: int = NumericProperty(0)
+
+    _col_names: Tuple[List[str], List[str]] = ()
+
+    def __init__(self, app, **kwargs):
+        super().__init__(**kwargs)
+        self._app = app
+        self.protocol = {}
+
+    def set_logging_file(self, log_file: nix.File):
+        assert not self.playing
+        self._log_file = log_file
+
+    def clear_logging_file(self):
+        assert not self.playing
+        self._log_file = None
+
+    def _run_protocol(
+            self, protocol: List[FlatProtocolItem], alarm: bool,
+            log_array: Optional[nix.DataArray],
+            sensors: List[DeviceDisplay]):
+        self._total_time = sum(item[0] for item in protocol)
+        self._total_stage_time = 0
+        rem_time = 0.
+        i = -1
+        self.n_stages = n = len(protocol)
+        ts = 0
+        self.stage_i = 0
+
+        def protocol_callback(*args):
+            nonlocal i, rem_time, ts, n
+
+            t = perf_counter()
+            if t - ts < rem_time:
+                return
+
+            i += 1
+            if i == n:
+                if alarm:
+                    thread = self._sound_thread = Thread(
+                        target=self._make_sound)
+                    thread.start()
+
+                self.stop()
+                self._update_clock()
+                return
+            # update only if not stopping
+            self.stage_i = i + 1
+
+            if log_array is not None:
+                log_array.append([perf_counter()])
+
+            dur, valves, mfcs = protocol[i]
+            rem_time += dur
+            for board, values in valves:
+                board.set_valves(**values)
+            for board, value in mfcs:
+                board.set_value(value)
+
+            self._total_stage_time = rem_time
+
+            for sensor in sensors:
+                if sensor.is_running:
+                    sensor.add_event(None, str(i))
+
+        self._protocol_clock_event = Clock.schedule_interval(
+            protocol_callback, 0)
+        self._clock_event = Clock.schedule_interval(self._update_clock, .25)
+
+        self._timer_ts = ts = perf_counter()
+        # this can stop above events
+        protocol_callback()
+
+        self._update_clock()
+
+    def _flatten_protocol(
+            self, protocol: List[ProtocolItem]) -> List[FlatProtocolItem]:
+        valves: List[ValveBoardWidget] = self._app.valve_boards
+        mfcs: List[MFCWidget] = self._app.mfcs
+
+        stages = []
+        for dur, valve_states, mfc_vals in protocol:
+            valve_groups = [
+                valve_states[i * 4: (i + 1) * 4]
+                for i in range(int(ceil(len(valve_states) / 4)))
+            ]
+            if len(valve_groups) != len(valves):
+                raise ValueError(
+                    'The number of valve columns is not the same as valves')
+            if len(mfc_vals) != len(mfcs):
+                raise ValueError(
+                    'The number of MFC columns is not the same as MFCs')
+
+            prepped_valves = []
+            for valve_board, states in zip(valves, valve_groups):
+                relays = {
+                    f'relay_{i}': val for i, val in enumerate(states)
+                    if val is not None
+                }
+                if relays:
+                    prepped_valves.append((valve_board, relays))
+
+            prepped_mfcs = [
+                (mfc, val) for mfc, val in zip(mfcs, mfc_vals)
+                if val is not None
+            ]
+            stages.append((dur, prepped_valves, prepped_mfcs))
+
+        return stages
+
+    @app_error
+    def start(self, key: str, alarm: bool):
+        from nsniff.main import NSniffApp
+        self.playing = True
+        app: NSniffApp = self._app
+
+        try:
+            dev: ExecuteDevice
+            for dev in app.valve_boards + app.mfcs:
+                if not dev.is_running:
+                    raise TypeError('Not all valves/MFCs have been started')
+
+            app.dump_app_settings_to_file()
+            config = pathlib.Path(
+                os.path.join(app.data_path, app.yaml_config_path)).read_text()
+
+            if key not in self.protocol:
+                raise ValueError('Protocol not available')
+            protocol = self._flatten_protocol(self.protocol[key])
+            if not len(protocol):
+                raise ValueError('No protocol available')
+        except Exception:
+            self.stop()
+            raise
+
+        f = self._log_file
+        log_array = None
+        if f is not None:
+            if 'experiment' not in f.blocks:
+                f.create_block('experiment', 'experiment')
+            block = f.blocks['experiment']
+            n = len(block.data_arrays)
+
+            log_array = block.create_data_array(
+                f'experiment_{n}', 'experiment', dtype=np.float64, data=[])
+            sec = f.create_section(f'experiment_{n}_metadata', 'metadata')
+            log_array.metadata = sec
+
+            valve_names, mfc_names = self._col_names
+            sec['protocol'] = self._exp_protocol_text
+            sec['valve_names'] = ','.join(valve_names)
+            sec['mfc_names'] = ','.join(mfc_names)
+            sec['protocol_key'] = key
+            sec['app_config'] = config
+
+        self._run_protocol(protocol, alarm, log_array, app.devices)
+
+    def stop(self):
+        if self._clock_event is not None:
+            self._clock_event.cancel()
+            self._clock_event = None
+
+        if self._protocol_clock_event is not None:
+            self._protocol_clock_event.cancel()
+            self._protocol_clock_event = None
+
+        self.playing = False
+
+    @app_error
+    def load_protocol(self, paths):
+        """Called by the GUI when user browses for a file.
+        """
+        self.protocol = {}
+        self.filename = ''
+
+        if not paths:
+            return
+        fname = pathlib.Path(paths[0])
+
+        self.last_directory = str(fname.parent)
+
+        data = fname.read_text(encoding='utf-8-sig')
+        self._exp_protocol_text = data
+
+        reader = csv.reader(data.splitlines(False))
+        header = next(reader)
+        if len(header) < 2:
+            raise ValueError(
+                'The csv file must have at least a duration and key column')
+
+        if header[0].lower() != 'duration':
+            raise ValueError('First column must be named duration')
+        if header[-1].lower() != 'key':
+            raise ValueError('Last column must be named key')
+
+        i = valve_s = 1
+        while i < len(header) - 1 and header[i].lower().startswith('valve_'):
+            i += 1
+        mfc_s = valve_e = i
+        while i < len(header) - 1 and header[i].lower().startswith('mfc_'):
+            i += 1
+        mfc_e = i
+        if i != len(header) - 1:
+            raise ValueError(
+                f'Reached column "{header[i]}" that does not start with valve_ '
+                f'or mfc_')
+
+        valve_names = [header[k][6:] for k in range(valve_s, valve_e)]
+        mfc_names = [header[k][4:] for k in range(mfc_s, mfc_e)]
+
+        protocols = {}
+        for row in reader:
+            dur = float(row[0])
+            key = row[-1]
+            valves = [
+                bool(int(row[k])) if row[k] else None
+                for k in range(valve_s, valve_e)
+            ]
+            mfcs = [
+                float(row[k]) if row[k] else None for k in range(mfc_s, mfc_e)]
+            item = dur, valves, mfcs
+
+            if key not in protocols:
+                protocols[key] = []
+            protocols[key].append(item)
+
+        self.protocol = protocols
+        self._col_names = valve_names, mfc_names
+        self.filename = str(fname)
+
+    def _update_clock(self, *args):
+        ts = self._timer_ts
+        if not ts:
+            self.remaining_time = self.stage_remaining_time = '00:00:00.0'
+            return
+
+        elapsed = perf_counter() - ts
+        self.remaining_time = pretty_time(
+            max(self._total_time - elapsed, 0), pad=True)
+        self.stage_remaining_time = pretty_time(
+            max(self._total_stage_time - elapsed, 0), pad=True)
+
+    def _make_sound(self):
+        sound = SoundLoader.load(
+            os.path.join(
+                os.path.dirname(__file__), 'data', 'Electronic_Chime.wav'))
+        sound.loop = True
+        sound.play()
+        sleep(4)
+        sound.stop()

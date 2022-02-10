@@ -1,27 +1,23 @@
-from os.path import join, dirname, exists
-import time
+from os.path import join, dirname
 import trio
 from base_kivy_app.app import BaseKivyApp, run_app_async as run_app_async_base
 from base_kivy_app.graphics import HighightButtonBehavior
-from typing import List, IO, Dict, Set, Tuple
-from tree_config import apply_config
+from typing import List, Set, Optional
 from string import ascii_letters, digits
-from threading import Thread
+import nixio as nix
 
 from kivy.lang import Builder
 from kivy.factory import Factory
 from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
-    ListProperty, NumericProperty
+    NumericProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.behaviors.focus import FocusBehavior
-from kivy.clock import Clock
-from kivy.core.audio import SoundLoader
 
 from kivy_trio.context import kivy_trio_context_manager
 
 import nsniff
-from nsniff.widget import DeviceDisplay, ValveBoardWidget, MFCWidget
-from nsniff.device import StratuscentBase
+from nsniff.widget import DeviceDisplay, ValveBoardWidget, MFCWidget, \
+    ExperimentStages
 
 __all__ = ('NSniffApp', 'run_app')
 
@@ -52,9 +48,11 @@ class MainView(FocusBehavior, BoxLayout):
         if keycode[1] not in self.valid_chars:
             return False
 
-        if self.app.filename:
+        if self.app.root.ids.stage_key.state == 'down' and \
+                not self.app.stage.playing and text in self.app.stage.protocol:
             self.keyboard_chars.add(keycode[1])
-            self.app.log_event(text, display=True)
+            self.app.root.ids.stage_key_text.text = text
+            self.app.root.ids.play_stage.trigger_action(0)
             return True
         return False
 
@@ -73,13 +71,14 @@ class NSniffApp(BaseKivyApp):
     """
 
     _config_props_ = (
-        'last_directory', 'event_times_countdown',
-        'event_times_countdown_default', 'pixel_height', 'n_valve_boards',
-        'n_mfc', 'n_sensors',
+        'last_directory', 'pixel_height', 'n_valve_boards',
+        'n_mfc', 'n_sensors', 'compression'
     )
 
     _config_children_ = {
-        'devices': 'devices', 'valve_boards': 'valve_boards', 'mfcs': 'mfcs'}
+        'devices': 'devices', 'valve_boards': 'valve_boards', 'mfcs': 'mfcs',
+        'stage': 'stage'
+    }
 
     last_directory = StringProperty('~')
     """The last directory opened in the GUI.
@@ -104,28 +103,9 @@ class NSniffApp(BaseKivyApp):
 
     devices: List[DeviceDisplay] = []
 
-    _log_file: IO = None
-
-    _devices_data = []
-
-    _devices_n_cols: List[int] = []
+    _nix_file: Optional[nix.File] = None
 
     global_focus = BooleanProperty(False)
-
-    _timer_ts = 0
-
-    _last_countdown = 0
-
-    remaining_time = StringProperty('00:00.0')
-
-    event_times_countdown_default = NumericProperty(180)
-
-    event_times_countdown: List[Tuple[str, float]] = ListProperty(
-        [('', 300)])
-
-    _event_times_countdown_dict: Dict[str, float] = {}
-
-    _sound_thread = None
 
     pixel_height: int = NumericProperty(4)
 
@@ -141,15 +121,30 @@ class NSniffApp(BaseKivyApp):
 
     mfcs: List[MFCWidget] = []
 
+    compression = StringProperty('Auto')
+    """Whether the h5 data file should internally compress the data that it
+    writes.
+
+    This is handled internally by the H5 library, with no external difference
+    in how the file is loaded/saved/accessed, except that the file size may be
+    smaller when compressed. Additionally, it may take a little more CPU when
+    saving experiment data if compressions is enabled.
+
+    Valid values are ``"ZIP"``, ``"None"``, or ``"Auto"``.
+    """
+
+    stage: ExperimentStages = ObjectProperty(None)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.devices = []
         self.valve_boards = []
         self.mfcs = []
-        self._event_times_countdown_dict = {}
+
+        self.stage = ExperimentStages(app=self)
+        self.stage.fbind('filename', self.set_tittle)
 
         self.fbind('filename', self.set_tittle)
-        self.fbind('event_times_countdown', self._parse_event_times)
         self.fbind(
             'n_sensors', self._update_num_io, 'devices', 'n_sensors',
             '_dev_container', DeviceDisplay)
@@ -183,8 +178,6 @@ class NSniffApp(BaseKivyApp):
 
         self.load_app_settings_from_file()
         self.apply_app_settings()
-        Clock.schedule_interval(self._update_clock, .25)
-        self._parse_event_times()
 
     def apply_config_property(self, name, value):
         setattr(self, name, value)
@@ -195,11 +188,16 @@ class NSniffApp(BaseKivyApp):
         """Periodically called by the Kivy Clock to update the title.
         """
         from kivy.core.window import Window
+
         filename = ''
         if self.filename:
             filename = ' - {}'.format(self.filename)
+        protocol = ''
+        if self.stage.filename:
+            protocol = ' - {}'.format(self.stage.filename)
 
-        Window.set_title(f'NSniff v{nsniff.__version__}, CPL lab{filename}')
+        Window.set_title(
+            f'NSniff v{nsniff.__version__}, CPL lab{filename}{protocol}')
 
     def check_close(self):
         if False:
@@ -223,6 +221,8 @@ class NSniffApp(BaseKivyApp):
         for dev in self.mfcs[:]:
             dev.stop()
 
+        self.stage.stop()
+
         self.close_file()
 
     async def async_run(self, *args, **kwargs):
@@ -235,10 +235,13 @@ class NSniffApp(BaseKivyApp):
         n_items = getattr(self, n_items_name)
         widgets = getattr(self, widgets_name)
         widgets_container = getattr(self, widgets_container_name)
+        nix_file = self._nix_file
 
         if n_items < len(widgets):
             for dev in widgets[n_items:]:
                 dev.stop()
+                dev.clear_logging_file()
+
                 widgets_container.remove_widget(dev)
                 widgets.remove(dev)
         else:
@@ -247,20 +250,8 @@ class NSniffApp(BaseKivyApp):
                 widgets_container.add_widget(dev)
                 widgets.append(dev)
 
-    def log_event(self, name, display=False):
-        t = StratuscentBase.get_time()
-        if display:
-            self.root.ids.event_name.text = name
-
-        self.log_device([t, name], len(self.devices))
-
-        for dev in self.devices:
-            dev.add_event(t, name)
-
-        self._timer_ts = t
-        self._last_countdown = self._event_times_countdown_dict.get(
-            name, self.event_times_countdown_default)
-        self._update_clock()
+                if nix_file is not None:
+                    dev.set_logging_file(nix_file)
 
     def save_file_callback(self, paths):
         """Called by the GUI when user browses for a file.
@@ -271,117 +262,41 @@ class NSniffApp(BaseKivyApp):
         if not paths:
             return
         fname = paths[0]
-        if not fname.endswith('.csv'):
-            fname += '.csv'
+        if not fname.endswith('.h5'):
+            fname += '.h5'
 
         self.last_directory = dirname(fname)
 
+        if self.compression == 'ZIP':
+            c = nix.Compression.DeflateNormal
+        elif self.compression == 'None':
+            c = nix.Compression.No
+        else:
+            c = nix.Compression.Auto
         self.filename = fname
-        self._log_file = open(fname, 'w')
-        self._devices_n_cols = n_cols = []
 
-        header = []
-        for dev in self.devices:
-            item = dev.get_data_header()
-            header.extend(item)
-            n_cols.append(len(item))
+        f = self._nix_file = nix.File.open(
+            fname, nix.FileMode.Overwrite, compression=c)
+        sec = f.create_section('app_config', 'configuration')
+        sec['app'] = 'nsniff'
+        sec['version'] = nsniff.__version__
 
-            dev.fbind(
-                'on_data_update', self._get_dev_data, index=len(n_cols) - 1)
+        for dev in self.devices + self.valve_boards + self.mfcs:
+            dev.set_logging_file(f)
 
-        header.extend(['Event time', 'event'])
-        n_cols.append(2)
-        self.write_line(header)
-        self._devices_data = [None, ] * len(n_cols)
-
-    def _get_dev_data(self, dev, *args, index=0):
-        self.log_device(dev.device.get_data_row(), index)
-
-    def log_device(self, data, index):
-        if self._devices_data[index] is None:
-            self._devices_data[index] = data
-            return
-
-        line = []
-        for count, item in zip(self._devices_n_cols, self._devices_data):
-            if item is not None:
-                line.extend(item)
-            else:
-                line.extend(['', ] * count)
-        self.write_line(line)
-
-        for i in range(len(self._devices_data)):
-            self._devices_data[i] = None
-
-        self._devices_data[index] = data
-
-    def write_line(self, values):
-        self._log_file.write(
-            ','.join(
-                [f'"{val}"' if isinstance(val, str) and val else str(val)
-                 for val in values]
-            ))
-        self._log_file.write('\n')
-        self._log_file.flush()
+        self.stage.set_logging_file(f)
 
     def close_file(self):
         if not self.filename:
             return
 
-        if any(data is not None for data in self._devices_data):
-            line = []
-            for count, item in zip(self._devices_n_cols, self._devices_data):
-                if item is not None:
-                    line.extend(item)
-                else:
-                    line.extend(['', ] * count)
-            self.write_line(line)
+        for dev in self.devices + self.valve_boards + self.mfcs:
+            dev.clear_logging_file()
+        self.stage.clear_logging_file()
 
-        self._log_file.close()
-        self._log_file = None
+        self._nix_file.close()
+        self._nix_file = None
         self.filename = ''
-
-        for i, dev in enumerate(self.devices):
-            dev.funbind('on_data_update', self._get_dev_data, index=i)
-
-        self._timer_ts = 0
-        self._update_clock()
-
-    def _update_clock(self, *args):
-        ts = self._timer_ts
-        if not ts:
-            self.remaining_time = '00:00.0'
-            return
-
-        was_zero = self.remaining_time == '00:00.0'
-        elapsed = StratuscentBase.get_time() - ts
-        remaining = max(self._last_countdown - elapsed, 0)
-        ms = round(remaining * 10) % 10
-        sec = int(remaining) % 60
-        minute = int(remaining / 60)
-        self.remaining_time = f'{minute:0>2}:{sec:0>2}.{ms}'
-
-        if not was_zero and self.remaining_time == '00:00.0':
-            thread = self._sound_thread = Thread(target=self._make_sound)
-            thread.start()
-
-    def _make_sound(self):
-        sound = SoundLoader.load(
-            join(dirname(__file__), 'data', 'Electronic_Chime.wav'))
-        sound.loop = True
-        sound.play()
-        time.sleep(4)
-        sound.stop()
-
-    def _parse_event_times(self, *args):
-        items = self._event_times_countdown_dict = {}
-        for key, value in self.event_times_countdown:
-            for char in key.split(','):
-                char = char.strip()
-                if not char:
-                    continue
-
-                items[char] = value
 
 
 def run_app():
