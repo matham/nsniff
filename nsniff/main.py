@@ -18,6 +18,7 @@ from kivy_trio.context import kivy_trio_context_manager
 import nsniff
 from nsniff.widget import DeviceDisplay, ValveBoardWidget, MFCWidget, \
     ExperimentStages
+from nsniff.model import SapinetModel
 
 __all__ = ('NSniffApp', 'run_app')
 
@@ -135,6 +136,8 @@ class NSniffApp(BaseKivyApp):
 
     stage: ExperimentStages = ObjectProperty(None)
 
+    model: SapinetModel = ObjectProperty(None)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.devices = []
@@ -143,6 +146,8 @@ class NSniffApp(BaseKivyApp):
 
         self.stage = ExperimentStages(app=self)
         self.stage.fbind('filename', self.set_tittle)
+
+        self.model = SapinetModel()
 
         self.fbind('filename', self.set_tittle)
         self.fbind(
@@ -239,6 +244,9 @@ class NSniffApp(BaseKivyApp):
 
         if n_items < len(widgets):
             for dev in widgets[n_items:]:
+                if widgets_name == 'devices':
+                    dev.funbind('on_data_update', self.sensor_update)
+
                 dev.stop()
                 dev.clear_logging_file()
 
@@ -252,6 +260,9 @@ class NSniffApp(BaseKivyApp):
 
                 if nix_file is not None:
                     dev.set_logging_file(nix_file)
+
+                if widgets_name == 'devices':
+                    dev.fbind('on_data_update', self.sensor_update)
 
     def save_file_callback(self, paths):
         """Called by the GUI when user browses for a file.
@@ -297,6 +308,9 @@ class NSniffApp(BaseKivyApp):
         self._nix_file.close()
         self._nix_file = None
         self.filename = ''
+
+    def sensor_update(self, widget: DeviceDisplay):
+        self.model.update_data(widget.unique_dev_id, widget.device.sensors_data)
 
 
 def run_app():

@@ -194,6 +194,12 @@
                         text: str(app.n_mfc)
                         on_focus: if not self.focus: app.n_mfc = int(self.text or 0)
                         input_filter: 'int'
+        FlatDivider:
+            color: app.theme.divider
+        ThemedLabel:
+            size_hint_x: None
+            width: self.texture_size[0]
+            text: 'Prediction: {}'.format(app.model.class_pred)
     ScrollView:
         bar_width: '15dp'
         scroll_type: ['bars']
