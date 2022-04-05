@@ -13,8 +13,6 @@ from kivy.properties import ObjectProperty, StringProperty, BooleanProperty, \
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.behaviors.focus import FocusBehavior
 
-from kivy_trio.context import kivy_trio_context_manager
-
 import nsniff
 from nsniff.widget import DeviceDisplay, ValveBoardWidget, MFCWidget, \
     ExperimentStages
@@ -230,10 +228,6 @@ class NSniffApp(BaseKivyApp):
 
         self.close_file()
 
-    async def async_run(self, *args, **kwargs):
-        with kivy_trio_context_manager():
-            await super().async_run(*args, **kwargs)
-
     def _update_num_io(
             self, widgets_name, n_items_name, widgets_container_name,
             widget_cls, *args):
@@ -309,7 +303,7 @@ class NSniffApp(BaseKivyApp):
         self._nix_file = None
         self.filename = ''
 
-    def sensor_update(self, widget: DeviceDisplay):
+    def sensor_update(self, widget: DeviceDisplay, *args):
         self.model.update_data(widget.unique_dev_id, widget.device.sensors_data)
 
 
