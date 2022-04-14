@@ -3,6 +3,7 @@ from random import random, shuffle, randint
 from time import perf_counter_ns, sleep
 import re
 import serial
+from serial.rs485 import RS485Settings
 try:
     from smbus2 import SMBus, i2c_msg
 except (ImportError, ModuleNotFoundError):
@@ -433,27 +434,32 @@ class MFC(MFCBase):
         ser = self.device = serial.Serial()
         ser.port = self.com_port
         ser.baudrate = 9600
-        ser.bytesize = serial.EIGHTBITS  # number of bits per bytes
-        ser.parity = serial.PARITY_NONE  # set parity check: no parity
-        ser.stopbits = serial.STOPBITS_ONE  # number of stop bits
-        ser.timeout = 10  # non-block read
-        ser.xonxoff = False  # disable software flow control
-        ser.rtscts = False  # disable hardware (RTS/CTS) flow control
-        ser.dsrdtr = False  # disable hardware (DSR/DTR) flow control
-        ser.writeTimeout = 10  # timeout for write
+        ser.bytesize = serial.EIGHTBITS
+        ser.parity = serial.PARITY_NONE
+        ser.stopbits = serial.STOPBITS_ONE
+        ser.timeout = 1
+        ser.xonxoff = False
+        ser.rtscts = False
+        ser.dsrdtr = False
+        ser.writeTimeout = 1
+        ser.rs485_mode = RS485Settings()
+        # for some reason, if we don't open, close, and reopen, every second
+        # command times out
+        ser.open()
+        ser.close()
         ser.open()
 
-        ser.write(f'!{dev:02X},M,D\r\n'.encode('ascii'))
+        ser.write(f'!{dev:02X},M,D\r'.encode('ascii'))
         read = f'!{dev:02X},MD\r\n'.encode('ascii')
-        data = ser.read(len(read))
+        data = ser.read_until(b'\n')
         if data != read:
             raise IOError(
                 f'Failed setting MFC to digital mode. '
                 f'Expected "{read}", got "{data}"')
 
-        ser.write(f'!{dev:02X},U,SLPM\r\n'.encode('ascii'))
+        ser.write(f'!{dev:02X},U,SLPM\r'.encode('ascii'))
         read = f'!{dev:02X},USLPM\r\n'.encode('ascii')
-        data = ser.read(len(read))
+        data = ser.read_until(b'\n')
         if data != read:
             raise IOError(
                 f'Failed setting MFC to use SLPM units. '
@@ -470,9 +476,9 @@ class MFC(MFCBase):
         dev = self.dev_address
         ser = self.device
 
-        ser.write(f'!{dev:02X},S,{value:.3f}\r\n'.encode('ascii'))
+        ser.write(f'!{dev:02X},S,{value:.3f}\r'.encode('ascii'))
         read = f'!{dev:02X},S{value:.3f}\r\n'.encode('ascii')
-        data = ser.read(len(read))
+        data = ser.read_until(b'\n')
         if data != read:
             raise IOError(
                 f'Failed setting MFC rate. Expected "{read}", got "{data}"')
@@ -481,8 +487,8 @@ class MFC(MFCBase):
         dev = self.dev_address
         ser = self.device
 
-        ser.write(f'!{dev:02X},F\r\n'.encode('ascii'))
-        data = ser.read_until(b'\n', 24)
+        ser.write(f'!{dev:02X},F\r'.encode('ascii'))
+        data = ser.read_until(b'\n')
         m = re.match(self._rate_pat, data)
         if m is None:
             raise IOError(f'Failed to read MFC rate. Got "{data}"')
