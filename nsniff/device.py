@@ -4,10 +4,6 @@ from time import perf_counter_ns, sleep
 import re
 import serial
 from serial.rs485 import RS485Settings
-try:
-    from smbus2 import SMBus, i2c_msg
-except (ImportError, ModuleNotFoundError):
-    pass
 
 from kivy.properties import ObjectProperty
 
@@ -295,24 +291,35 @@ class MODIOBase(DigitalPort, DeviceContext):
 
 class MODIOBoard(MODIOBase):
 
-    bus = None
+    device: Optional[serial.Serial] = None
 
     @apply_executor
     def open_device(self):
-        self.bus = SMBus(1)
+        ser = self.device = serial.Serial()
+        ser.port = self.com_port
+        ser.baudrate = 19200
+        ser.bytesize = serial.EIGHTBITS
+        ser.parity = serial.PARITY_NONE
+        ser.stopbits = serial.STOPBITS_ONE
+        ser.timeout = 1
+        ser.xonxoff = False
+        ser.rtscts = False
+        ser.dsrdtr = False
+        ser.writeTimeout = 1
+        ser.open()
 
     @apply_executor
     def close_device(self):
-        if self.bus is not None:
-            self.bus.close()
-            self.bus = None
+        if self.device is not None:
+            self.device.close()
+            self.device = None
 
     @apply_executor(callback='update_write_data')
     def write_states(
             self, high: Iterable[str] = (), low: Iterable[str] = (),
             **kwargs: bool):
         value = self._combine_write_args(high, low, kwargs)
-        self.bus.write_byte_data(self.dev_address, 0x10, value)
+        self.device.write(bytes([self.dev_address | 0b10000000, 0x10, value]))
         return value, self.get_time()
 
     def _read_state(self, opto=True, analog_channels: Iterable[str] = ()):
@@ -321,15 +328,15 @@ class MODIOBoard(MODIOBase):
 
         opto_val = None
         if opto:
-            self.bus.write_byte(self.dev_address, 0x20)
-            opto_val = self.bus.read_byte(self.dev_address)
+            self.device.write(bytes([self.dev_address | 0b10000000, 0x20]))
+            opto_val = self.device.read(1)
 
         analog_vals = {}
         a_map = self._analog_map
         for chan in analog_channels:
-            self.bus.write_byte(self.dev_address, 0x30 | (1 << a_map[chan]))
-            msg = i2c_msg.read(self.dev_address, 2)
-            self.bus.i2c_rdwr(msg)
+            self.device.write(bytes(
+                [self.dev_address | 0b10000000, 0x30 | (1 << a_map[chan])]))
+            msg = self.device.read(2)
             data = list(msg)
             assert len(data) == 2
 
