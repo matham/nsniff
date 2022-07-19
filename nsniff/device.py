@@ -188,9 +188,11 @@ class VirtualStratuscentSensor(StratuscentBase):
 
 class MODIOBase(DigitalPort, DeviceContext):
 
-    _config_props_ = ('dev_address', )
+    _config_props_ = ('dev_address', 'com_port')
 
     dev_address: int = 0
+
+    com_port: str = ''
 
     relay_0: bool = False
 
@@ -225,8 +227,9 @@ class MODIOBase(DigitalPort, DeviceContext):
 
     _analog_map: Dict[str, int] = {f'analog_{i}': i for i in range(4)}
 
-    def __init__(self, dev_address: int = 0, **kwargs):
+    def __init__(self, com_port: str = '', dev_address: int = 0, **kwargs):
         self.dev_address = dev_address
+        self.com_port = com_port
         super().__init__(**kwargs)
 
     def _combine_write_args(

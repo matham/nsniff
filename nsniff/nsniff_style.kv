@@ -681,6 +681,16 @@
                 ThemedLabel:
                     size_hint: None, None
                     size: self.texture_size[0], '24dp'
+                    text: 'COM port:'
+                FlatSizedTextInput:
+                    background_color: app.theme.primary_text
+                    size_hint_min_x: '100dp'
+                    text: root.com_port
+                    on_text: root.com_port = self.text
+                    hint_text: 'port'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
                     text: 'Device address:'
                 FlatSizedTextInput:
                     background_color: app.theme.primary_text
