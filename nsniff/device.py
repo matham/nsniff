@@ -2,6 +2,7 @@ from typing import Optional, List, Union, Iterable, Dict
 from random import random, shuffle, randint
 from time import perf_counter_ns, sleep
 import re
+from threading import Lock
 import serial
 from serial.rs485 import RS485Settings
 
@@ -186,6 +187,83 @@ class VirtualStratuscentSensor(StratuscentBase):
                     break
 
 
+class SerialDevice:
+    """Can be shared among multiple :class:`MODIOBoard`.
+    """
+
+    devices: Dict[str, 'SerialDevice'] = {}
+
+    _device_count: Dict[str, int] = {}
+
+    port: Optional[serial.Serial] = None
+
+    com_port: str = ''
+
+    _creation_lock = Lock()
+
+    _access_lock: Lock = None
+
+    def __init__(self, com_port: str):
+        self.com_port = com_port
+        self._access_lock = Lock()
+
+    @classmethod
+    def get_open_device(cls, com_port: str) -> 'SerialDevice':
+        with cls._creation_lock:
+            if com_port in cls.devices:
+                cls._device_count[com_port] += 1
+                return cls.devices[com_port]
+
+            cls._device_count[com_port] = 1
+            dev = cls.devices[com_port] = SerialDevice(com_port=com_port)
+            dev._open()
+            return dev
+
+    def return_device(self) -> None:
+        cls = self.__class__
+        com_port = self.com_port
+        with cls._creation_lock:
+            if com_port not in cls.devices:
+                return
+            cls._device_count[com_port] -= 1
+            if cls._device_count[com_port]:
+                return
+
+            dev = cls.devices[com_port]
+            del cls._device_count[com_port]
+            del cls.devices[com_port]
+            dev._close()
+
+    def _open(self):
+        ser = serial.Serial()
+        ser.port = self.com_port
+        ser.baudrate = 19200
+        ser.bytesize = serial.EIGHTBITS
+        ser.parity = serial.PARITY_NONE
+        ser.stopbits = serial.STOPBITS_ONE
+        ser.timeout = 1
+        ser.xonxoff = False
+        ser.rtscts = False
+        ser.dsrdtr = False
+        ser.writeTimeout = 1
+        ser.open()
+
+        self.port = ser
+
+    def _close(self):
+        if self.port is not None:
+            self.port.close()
+            self.port = None
+
+    def write(self, data):
+        with self._access_lock:
+            self.port.write(data)
+
+    def read(self, n):
+        with self._access_lock:
+            return self.port.read(n)
+
+
 class MODIOBase(DigitalPort, DeviceContext):
 
     _config_props_ = ('dev_address', 'com_port')
@@ -294,27 +372,16 @@ class MODIOBase(DigitalPort, DeviceContext):
 
 class MODIOBoard(MODIOBase):
 
-    device: Optional[serial.Serial] = None
+    device: Optional[SerialDevice] = None
 
     @apply_executor
     def open_device(self):
-        ser = self.device = serial.Serial()
-        ser.port = self.com_port
-        ser.baudrate = 19200
-        ser.bytesize = serial.EIGHTBITS
-        ser.parity = serial.PARITY_NONE
-        ser.stopbits = serial.STOPBITS_ONE
-        ser.timeout = 1
-        ser.xonxoff = False
-        ser.rtscts = False
-        ser.dsrdtr = False
-        ser.writeTimeout = 1
-        ser.open()
+        self.device = SerialDevice.get_open_device(self.com_port)
 
     @apply_executor
     def close_device(self):
         if self.device is not None:
-            self.device.close()
+            self.device.return_device()
             self.device = None
 
     @apply_executor(callback='update_write_data')
