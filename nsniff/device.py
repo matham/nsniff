@@ -508,13 +508,17 @@ class MFC(MFCBase):
 
     device: Optional[serial.Serial] = None
 
-    _rate_pat = None
+    _rate_read_pat = None
+
+    _rate_write_pat = None
 
     @apply_executor
     def open_device(self):
         dev = self.dev_address
-        self._rate_pat = re.compile(
+        self._rate_read_pat = re.compile(
             rf'!{dev:02X},([0-9.]+)\r\n'.encode('ascii'))
+        self._rate_write_pat = re.compile(
+            rf'!{dev:02X},S([0-9.]+)\r\n'.encode('ascii'))
 
         ser = self.device = serial.Serial()
         ser.port = self.com_port
@@ -564,7 +568,8 @@ class MFC(MFCBase):
         ser.write(f'!{dev:02X},S,{value:.3f}\r'.encode('ascii'))
         read = f'!{dev:02X},S{value:.3f}\r\n'.encode('ascii')
         data = ser.read_until(b'\n')
-        if data != read:
+        m = re.match(self._rate_write_pat, data)
+        if m is None:
             raise IOError(
                 f'Failed setting MFC rate. Expected "{read}", got "{data}"')
 
@@ -574,7 +579,7 @@ class MFC(MFCBase):
 
         ser.write(f'!{dev:02X},F\r'.encode('ascii'))
         data = ser.read_until(b'\n')
-        m = re.match(self._rate_pat, data)
+        m = re.match(self._rate_read_pat, data)
         if m is None:
             raise IOError(f'Failed to read MFC rate. Got "{data}"')
         return float(m.group(1).decode('ascii')), self.get_time()
