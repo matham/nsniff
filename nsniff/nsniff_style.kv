@@ -730,6 +730,17 @@
                     text: root.unique_dev_id
                     on_text: root.unique_dev_id = self.text
                     hint_text: 'unique ID'
+                ThemedLabel:
+                    size_hint: None, None
+                    size: self.texture_size[0], '24dp'
+                    text: 'Reverse:'
+                AccentThemedToggleButton:
+                    text: 'Reverse relay'
+                    state: 'down' if root.reverse_relay else 'normal'
+                    size_hint_min_x: self.texture_size[0]
+                    padding_x: '10dp'
+                    on_state: root.reverse_relay = self.state == 'down'
+                    hover_text: 'Whether Valve 1 maps to relay 4 etc.'
 
 
 <MFCWidget>:

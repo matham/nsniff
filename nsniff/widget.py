@@ -719,11 +719,13 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
 
 class ValveBoardWidget(BoxLayout, ExecuteDevice):
 
-    _config_props_ = ('dev_address', 'com_port')
+    _config_props_ = ('dev_address', 'com_port', 'reverse_relay')
 
     dev_address: int = NumericProperty(0)
 
     com_port: str = StringProperty('')
+
+    reverse_relay: bool = BooleanProperty(False)
 
     device: Optional[MODIOBase] = ObjectProperty(
         None, allownone=True, rebind=True)

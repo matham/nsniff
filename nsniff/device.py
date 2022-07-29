@@ -266,11 +266,13 @@ class SerialDevice:
 
 class MODIOBase(DigitalPort, DeviceContext):
 
-    _config_props_ = ('dev_address', 'com_port')
+    _config_props_ = ('dev_address', 'com_port', 'reverse_relay')
 
     dev_address: int = 0
 
     com_port: str = ''
+
+    reverse_relay: bool = False
 
     relay_0: bool = False
 
@@ -303,17 +305,23 @@ class MODIOBase(DigitalPort, DeviceContext):
 
     _relay_map: Dict[str, int] = {f'relay_{i}': i for i in range(4)}
 
+    _relay_map_rev: Dict[str, int] = {f'relay_{i}': 3 - i for i in range(4)}
+
     _analog_map: Dict[str, int] = {f'analog_{i}': i for i in range(4)}
 
-    def __init__(self, com_port: str = '', dev_address: int = 0, **kwargs):
+    def __init__(
+            self, com_port: str = '', dev_address: int = 0, reverse_relay=False,
+            **kwargs):
         self.dev_address = dev_address
         self.com_port = com_port
+        self.reverse_relay = reverse_relay
         super().__init__(**kwargs)
 
     def _combine_write_args(
             self, high: Iterable[str], low: Iterable[str],
             kwargs: Dict[str, bool]):
-        relay_map = self._relay_map
+        relay_map = \
+            self._relay_map_rev if self.reverse_relay else self._relay_map
         value = 0
 
         for item in high:
