@@ -37,10 +37,10 @@ from nsniff.device import StratuscentSensor, VirtualStratuscentSensor, \
 __all__ = ('DeviceDisplay', 'ValveBoardWidget', 'MFCWidget', 'ExperimentStages')
 
 
-ProtocolItem = Tuple[float, List[Optional[bool]], List[Optional[float]]]
+ProtocolItem = Tuple[float, List[Optional[bool]], List[Optional[float]], str]
 FlatProtocolItem = Tuple[
     float, List[Tuple['ValveBoardWidget', Dict[str, bool]]],
-    List[Tuple['MFCWidget', float]]
+    List[Tuple['MFCWidget', float]], str
 ]
 
 
@@ -688,7 +688,7 @@ class DeviceDisplay(BoxLayout, ExecuteDevice):
         self.max_val[channel, 0] = value
         self._draw_trigger()
 
-    def add_event(self, t: Optional[float], name: str):
+    def add_event(self, t: Optional[float], name: str, label):
         if t is None:
             t = self.t
         p = LinePlot(color=(0, 0, 0), line_width=dp(3))
@@ -965,6 +965,7 @@ class ExperimentStages(EventDispatcher):
     def _run_protocol(
             self, protocol: List[FlatProtocolItem], alarm: bool,
             log_array: Optional[nix.DataArray],
+            label_array: Optional[nix.DataArray], label_dtype: str,
             sensors: List[DeviceDisplay]):
         self._total_time = sum(item[0] for item in protocol)
         self._total_stage_time = 0
@@ -994,10 +995,11 @@ class ExperimentStages(EventDispatcher):
             # update only if not stopping
             self.stage_i = i + 1
 
+            dur, valves, mfcs, label = protocol[i]
             if log_array is not None:
                 log_array.append([perf_counter()])
+                label_array.append(np.array([label], dtype=label_dtype))
 
-            dur, valves, mfcs = protocol[i]
             rem_time += dur
             for board, values in valves:
                 board.set_valves(**values)
@@ -1008,7 +1010,7 @@ class ExperimentStages(EventDispatcher):
 
             for sensor in sensors:
                 if sensor.is_running:
-                    sensor.add_event(None, str(i))
+                    sensor.add_event(None, str(i), label)
 
         self._protocol_clock_event = Clock.schedule_interval(
             protocol_callback, 0)
@@ -1026,7 +1028,7 @@ class ExperimentStages(EventDispatcher):
         mfcs: List[MFCWidget] = self._app.mfcs
 
         stages = []
-        for dur, valve_states, mfc_vals in protocol:
+        for dur, valve_states, mfc_vals, label in protocol:
             valve_groups = [
                 valve_states[i * 4: (i + 1) * 4]
                 for i in range(int(ceil(len(valve_states) / 4)))
@@ -1051,7 +1053,7 @@ class ExperimentStages(EventDispatcher):
                 (mfc, val) for mfc, val in zip(mfcs, mfc_vals)
                 if val is not None
             ]
-            stages.append((dur, prepped_valves, prepped_mfcs))
+            stages.append((dur, prepped_valves, prepped_mfcs, label))
 
         return stages
 
@@ -1082,6 +1084,8 @@ class ExperimentStages(EventDispatcher):
 
         f = self._log_file
         log_array = None
+        label_array = None
+        label_dtype = ''
         if f is not None:
             if 'experiment' not in f.blocks:
                 f.create_block('experiment', 'experiment')
@@ -1093,6 +1097,13 @@ class ExperimentStages(EventDispatcher):
             sec = f.create_section(f'experiment_{n}_metadata', 'metadata')
             log_array.metadata = sec
 
+            max_label = max(max(len(k[3]) for k in protocol), 1)
+            label_dtype = f'S{max_label}'
+            label_array = block.create_data_array(
+                f'experiment_names_{n}', 'experiment', dtype=label_dtype,
+                data=[]
+            )
+
             valve_names, mfc_names = self._col_names
             sec['protocol'] = self._exp_protocol_text
             sec['valve_names'] = ','.join(valve_names)
@@ -1100,7 +1111,8 @@ class ExperimentStages(EventDispatcher):
             sec['protocol_key'] = key
             sec['app_config'] = config
 
-        self._run_protocol(protocol, alarm, log_array, app.devices)
+        self._run_protocol(
+            protocol, alarm, log_array, label_array, label_dtype, app.devices)
 
     def stop(self):
         if self._clock_event is not None:
@@ -1137,17 +1149,19 @@ class ExperimentStages(EventDispatcher):
 
         if header[0].lower() != 'duration':
             raise ValueError('First column must be named duration')
-        if header[-1].lower() != 'key':
+        if header[-2].lower() != 'key':
+            raise ValueError('Last column must be named key')
+        if header[-1].lower() != 'label':
             raise ValueError('Last column must be named key')
 
         i = valve_s = 1
-        while i < len(header) - 1 and header[i].lower().startswith('valve_'):
+        while i < len(header) - 2 and header[i].lower().startswith('valve_'):
             i += 1
         mfc_s = valve_e = i
-        while i < len(header) - 1 and header[i].lower().startswith('mfc_'):
+        while i < len(header) - 2 and header[i].lower().startswith('mfc_'):
             i += 1
         mfc_e = i
-        if i != len(header) - 1:
+        if i != len(header) - 2:
             raise ValueError(
                 f'Reached column "{header[i]}" that does not start with valve_ '
                 f'or mfc_')
@@ -1158,14 +1172,15 @@ class ExperimentStages(EventDispatcher):
         protocols = {}
         for row in reader:
             dur = float(row[0])
-            key = row[-1]
+            key = row[-2]
+            label = row[-1]
             valves = [
                 bool(int(row[k])) if row[k] else None
                 for k in range(valve_s, valve_e)
             ]
             mfcs = [
                 float(row[k]) if row[k] else None for k in range(mfc_s, mfc_e)]
-            item = dur, valves, mfcs
+            item = dur, valves, mfcs, label
 
             if key not in protocols:
                 protocols[key] = []
