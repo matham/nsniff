@@ -4,6 +4,7 @@ from numpy import linalg as LA
 from sklearn.decomposition import PCA
 import nixio as nix
 from typing import Dict, List, Tuple
+from collections import defaultdict
 import matplotlib.pyplot as plt
 from itertools import chain
 from copy import deepcopy
@@ -455,9 +456,72 @@ class Experiment:
             runs.append(([sensor], events))
         self.runs = runs
 
+    def plot_pca_points(
+            self, grouped_trials: List[EventTrials], section, n_components,
+            summary='mean', summarize_trials=False, classes=None):
+        samples = defaultdict(list)
+        for trials in grouped_trials:
+            for trial in trials.trials:
+                data = trial.get_section(section)
+                mn = min((sensor.shape[0] for sensor in data))
+                data = np.concatenate(
+                    [sensor[:mn, :] for sensor in data], axis=1)
+                data = getattr(np, summary)(data, axis=0, keepdims=True)
+
+                if classes:
+                    samples[classes[trial.trial_code]].append(data)
+                else:
+                    samples[trial.trial_code].append(data)
+
+        grouped_samples = {
+            k: np.concatenate(v, axis=0) for k, v in samples.items()}
+        all_samples = np.concatenate(
+            [item for items in samples.values() for item in items], axis=0)
+
+        pca = PCA(n_components=n_components)
+        pca.fit(all_samples)
+        print((pca.explained_variance_ratio_ * 100).tolist())
+
+        fig = plt.figure()
+
+        if n_components == 2:
+            ax = fig.add_subplot()
+            for name, data in grouped_samples.items():
+                data = pca.transform(data)
+                if summarize_trials:
+                    data = getattr(np, summary)(data, axis=0, keepdims=True)
+                ax.plot(data[:, 0], data[:, 1], '*', label=name)
+
+        elif n_components == 3:
+            ax = fig.add_subplot(projection='3d')
+            for name, data in grouped_samples.items():
+                data = pca.transform(data)
+                if summarize_trials:
+                    data = getattr(np, summary)(data, axis=0, keepdims=True)
+                ax.scatter(
+                    data[:, 0], data[:, 1], data[:, 2], marker='*', label=name)
+
+            ax.set_zlabel('Dim 3')
+        else:
+            raise ValueError(f'Invalid n_components of {n_components}')
+
+        ax.set_xlabel('Dim 1')
+        ax.set_ylabel('Dim 2')
+        ax.set_title(f'PCA {summary}')
+        ax.legend()
+
 
 if __name__ == '__main__':
-    files = r'G:\Python\peanut2022_01.h5', r'G:\Python\peanut2022_02.h5'
+    files = r'G:\Python\peanut2022_01.h5', r'G:\Python\peanut2022_02.h5', \
+        r'G:\Python\peanut2022_03.h5'
+
+    classes = {
+        'blank': 'blank', 'peanut': 'peanut', 'pb-bites': 'peanut',
+        'reeses cups': 'peanut', 'pb-granola bar': 'peanut',
+        'peanut sauce': 'peanut', 'hoisin sauce': 'none',
+        'curry powder': 'none', 'sunflower seeds': 'none',
+        'tahini': 'none', 'kitkat': 'none',
+    }
 
     experiment = Experiment(end_code='end')
     for filename in files:
@@ -467,15 +531,19 @@ if __name__ == '__main__':
     experiment.parse_trials(pre_trial_duration=50, post_trial_duration=50)
 
     normalized_trials = experiment.normalize_trials(
-        experiment.grouped_trials, per_trial=False, baseline='pre',
-        per_odor=False)
+        experiment.grouped_trials, per_trial=True, baseline='pre',
+        per_odor=True)
     # normalized_trials = experiment.grouped_trials
 
-    # experiment.plot_groups_2d_grid(
-    #     normalized_trials, section='trial', n_cols=4, individual_trials=False)
+    experiment.plot_groups_2d_grid(
+        normalized_trials, section='trial', n_cols=4, individual_trials=False)
     # experiment.plot_groups_2d_grid(
     #     normalized_trials, section='trial', n_cols=4, individual_trials=True)
-    # experiment.plot_groups_2d(normalized_trials, section='trial')
-    experiment.plot_groups_3d(normalized_trials, section='all', n_cols=4)
+    experiment.plot_groups_2d(normalized_trials, section='trial')
+    experiment.plot_groups_3d(
+        normalized_trials, section='all', n_cols=4, norm_each_sensor=True)
+    # experiment.plot_pca_points(
+    #     normalized_trials, section='trial', n_components=2,
+    #     summarize_trials=False, classes=classes)
 
     plt.show()
